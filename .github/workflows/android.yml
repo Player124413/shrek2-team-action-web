@@ -199,6 +199,8 @@ jobs:
           key: ffmpeg-android-${{ env.FFMPEG_VERSION }}-${{ env.NDK_VERSION }}
 
       - name: FFmpeg for arm64 (Bink decoders)
+        # Bink video needs it; the CMake configure refuses to build without it, so a failure here must
+        # not silently produce an APK with broken cutscenes -- fail the job instead.
         run: .github/scripts/fetch-ffmpeg-android.sh
 
       - name: Release keystore

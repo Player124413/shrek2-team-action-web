@@ -16,9 +16,14 @@ if [ -f "$OUT/lib/libavcodec.a" ]; then
   exit 0
 fi
 
-NDK="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
-[ -n "$NDK" ] && [ -d "$NDK" ] || { echo "ANDROID_NDK_HOME is not set; install the NDK first" >&2; exit 1; }
-export ANDROID_NDK_HOME="$NDK"
+# sdkmanager does not export a path to what it installs: find the NDK under the SDK.
+if [ -z "${ANDROID_NDK_HOME:-}" ] || [ ! -d "${ANDROID_NDK_HOME:-}" ]; then
+  for candidate in "${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}"/ndk/*; do
+    [ -d "$candidate" ] && export ANDROID_NDK_HOME="$candidate"
+  done
+fi
+[ -n "${ANDROID_NDK_HOME:-}" ] && [ -d "$ANDROID_NDK_HOME" ] \
+  || { echo "no NDK installed under the SDK; install it first" >&2; exit 1; }
 
 SRC_DIR="$ROOT/work/tools/ffmpeg-src"
 mkdir -p "$SRC_DIR"
