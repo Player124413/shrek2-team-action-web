@@ -32,11 +32,10 @@ TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/$HOST_TAG"
 export PATH="$TOOLCHAIN/bin:$PATH"
 mkdir -p "$BUILD"
 cd "$BUILD"
-# The archive is linked into libshrek2.so, so every object has to be position independent:
-#   * --enable-pic builds the C code that way;
-#   * --disable-neon drops libavutil/aarch64/tx_float_neon.S, which in 7.1.x addresses the transform
-#     tables with absolute relocations (R_AARCH64_ADR_PREL_PG_HI21) and makes ld.lld refuse to link a
-#     shared library. The decoders we use (bink, binkaudio) are plain C, so nothing is lost.
+# The archive is linked into libshrek2.so, so the C code is built position independent. FFmpeg's arm64
+# assembly reaches some tables with absolute relocations, which a shared library only accepts when the
+# symbol cannot be preempted; the app links with -Wl,--exclude-libs,ALL -Wl,-Bsymbolic for exactly that
+# reason (see android/app/src/main/cpp/CMakeLists.txt), and the self-check below links the same way.
 "$SRC/configure" \
   --prefix="$OUT" --target-os=android --arch=aarch64 --enable-cross-compile \
   --cc="$TOOLCHAIN/bin/aarch64-linux-android$API-clang" \
@@ -48,7 +47,7 @@ cd "$BUILD"
   --disable-swresample --disable-swscale --disable-avfilter --disable-vulkan \
   --enable-decoder=bink --enable-decoder=binkaudio_rdft --enable-decoder=binkaudio_dct \
   --enable-static --disable-shared \
-  --enable-pic --disable-neon \
+  --enable-pic \
   --extra-cflags="-O3 -fPIC -DPIC" --extra-ldflags="-fPIC"
 make -j"$(nproc)"
 make install
@@ -59,7 +58,8 @@ CHECK="$BUILD/link-check"
 mkdir -p "$CHECK"
 printf 'int shrek2_ffmpeg_probe(void) { return 0; }\n' > "$CHECK/probe.c"
 if ! "$TOOLCHAIN/bin/aarch64-linux-android$API-clang" -shared -fPIC -o "$CHECK/libprobe.so" "$CHECK/probe.c" \
-     -Wl,--whole-archive "$OUT/lib/libavcodec.a" "$OUT/lib/libavutil.a" -Wl,--no-whole-archive -lz -lm; then
+     -Wl,--whole-archive "$OUT/lib/libavcodec.a" "$OUT/lib/libavutil.a" -Wl,--no-whole-archive \
+     -Wl,--exclude-libs,ALL -Wl,-Bsymbolic -Wl,--no-undefined -lz -lm; then
   echo "FFmpeg was built, but its archives do not link into a shared library (non-PIC objects)." >&2
   exit 1
 fi

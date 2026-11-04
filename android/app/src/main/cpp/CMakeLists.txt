@@ -50,6 +50,11 @@ add_library(shrek2 SHARED
 # pointers in 32-bit registers -- needs no fixup. It costs a full 4 GiB reservation, which is why the
 # mmap in memory.cpp is MAP_NORESERVE and why the 64-bit build must opt into it explicitly.
 target_compile_definitions(shrek2 PRIVATE RT_PLAYER=1 GUEST_BASE=0)
+
+# FFmpeg's arm64 assembly addresses libavutil's tables absolutely, which a shared library only allows
+# for symbols that cannot be preempted. Hiding the static archives' symbols and binding internally is
+# the fix, and it also keeps the dynamic symbol table down to our JNI entry points.
+target_link_options(shrek2 PRIVATE -Wl,--exclude-libs,ALL -Wl,-Bsymbolic)
 # GLES3/GLES2 headers come from the NDK's sysroot (the same API the device runs); only the KHR
 # platform types are taken from the vendored copy, which is what the executor's extension prototypes
 # expect.
