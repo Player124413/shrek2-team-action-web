@@ -62,6 +62,40 @@ tools/release-test.sh      # version codes, key generation, "will this APK repla
 node tools/check-workflows.mjs   # the workflow itself: jobs, needs, step outputs, bash -n
 ```
 
+## CI
+
+`.github/workflows/android.yml` runs on every branch, on pull requests, and on `v*` tags:
+
+| job | what it proves |
+| --- | --- |
+| `checks` | the AOT suites, the ETC2 transcoder, the native syntax gate, the release rules, shellcheck, the workflow schema |
+| `image` | the AOT image builds and re-reads correctly (skipped when no reference executable is configured) |
+| `apk` | Gradle + NDK + CMake produce `shrek2-<version>.apk`, and its package, versionCode, signature and ABI are inspected |
+| `release` | on a tag: the APK is proven to install as an update over the previous release, then published |
+
+Secrets (optional -- without them the APK is built unsigned and never published):
+
+| secret | purpose |
+| --- | --- |
+| `SHREK2_KEYSTORE_BASE64` | base64 of the release `.jks` (`tools/android-keygen.sh` prints the command) |
+| `SHREK2_KEYSTORE_PASSWORD`, `SHREK2_KEY_ALIAS`, `SHREK2_KEY_PASSWORD` | its credentials |
+| `SHREK2_EXE_BASE64` | base64 of the player's own `Shrek 2.exe`, to bake the AOT image into the APK |
+
+Everything the workflow does can be run locally: `tools/ci-local.sh` for the step order,
+`node tools/check-workflows.mjs` for the file itself.
+
+### Notes from the first real runs
+
+Two things only a real NDK and a real linker caught:
+
+* `runtime/src/core/core.cpp` read the interrupted PC out of `ucontext_t` for the sampling profiler,
+  which only exists in that layout on x86-64. It is now compiled out everywhere else -- the
+  watchdog (which is what Android needs) still runs.
+* FFmpeg's arm64 archive contains absolute references to its own tables, which a shared library
+  only accepts for non-preemptible symbols: the app links with `-Wl,--exclude-libs,ALL -Wl,-Bsymbolic`,
+  and `tools/build-ffmpeg-android.sh` links a probe `.so` after installing so a non-PIC build fails
+  there instead of ten minutes later in Gradle.
+
 ## Updating in place
 
 An APK only *replaces* an installed app when three things hold; Android refuses everything else:

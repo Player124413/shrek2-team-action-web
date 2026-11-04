@@ -41,12 +41,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Toolchain
-        run: |
-          # This repository is a public mirror of the game project; its Actions settings are managed
-          # centrally and every expression that reads `secrets.*` fails to *parse* there
-          # ("Unrecognized named-value: 'secrets'") before any job starts. The self-tests therefore
-          # must not depend on secrets either: they run from the repository only.
-          echo "runner: $(uname -sm), python $(python3 -V | cut -d' ' -f2), node $(node -v)"
+        # Printed once so a failure can be tied to a version; nothing here depends on secrets, so a fork
+        # and a pull request from a fork run exactly the same checks.
+        run: echo "runner: $(uname -sm), python $(python3 -V | cut -d' ' -f2), node $(node -v)"
 
       - uses: actions/setup-node@v4
         with:
