@@ -12,8 +12,13 @@
 # control it built. Nothing is mocked away that the start-up path actually uses, and any exception is a
 # failure: that is exactly what the phone would do -- minus the crash dialog.
 #
-# Usage: tools/android-stubs-runtime.sh [--keep]
+# Usage: tools/android-stubs-runtime.sh [--keep] [disc.iso]
 #   KOTLINC=/path/to/kotlinc (default: kotlinc on PATH)
+#
+# With a disc image (the corpus: `node runtime/test/cab-lzx-corpus.mjs --out <dir>` then pass
+# `<dir>/shrek2.iso`) it also drives the whole install path through the launcher: a `content://`
+# document -> installer -> install directory. `tools/installer-test.sh` does exactly that, so CI covers
+# both the installer and the screen that starts it.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -112,7 +117,35 @@ open class Intent {
   }
 }
 open class ContentResolver {
-  open fun openInputStream(uri: android.net.Uri): java.io.InputStream? = null
+  /** Set by the harness: the document bytes (a null stand-in means "no such document"). */
+  var document: ByteArray? = null
+  /** When set, the provider refuses to return bytes past this offset -- a download that stops early. */
+  var stopsAfter: Long = -1
+  open fun openInputStream(uri: android.net.Uri): java.io.InputStream? {
+    val bytes = document ?: return null
+    return object : java.io.InputStream() {
+      var at = 0L
+      override fun read(): Int {
+        if (stopsAfter >= 0 && at >= stopsAfter) return -1
+        if (at >= bytes.size) return -1
+        return bytes[(at++).toInt()].toInt() and 0xff
+      }
+      override fun read(b: ByteArray, off: Int, len: Int): Int {
+        if (stopsAfter >= 0 && at >= stopsAfter) return -1
+        if (at >= bytes.size) return -1
+        val n = minOf(len.toLong(), bytes.size - at, if (stopsAfter >= 0) stopsAfter - at else Long.MAX_VALUE).toInt()
+        if (n <= 0) return -1
+        System.arraycopy(bytes, at.toInt(), b, off, n)
+        at += n
+        return n
+      }
+      override fun skip(n: Long): Long {
+        val step = minOf(n, bytes.size - at, if (stopsAfter >= 0) maxOf(0, stopsAfter - at) else Long.MAX_VALUE)
+        at += step
+        return step
+      }
+    }
+  }
   open fun query(uri: android.net.Uri, projection: Array<String>?, selection: String?, args: Array<String>?, sort: String?): android.database.Cursor? = null
   open fun takePersistableUriPermission(uri: android.net.Uri, mode: Int) {}
 }
@@ -373,7 +406,29 @@ object StubAssets : android.content.res.AssetManager() {
   override fun open(name: String): java.io.InputStream = throw java.io.FileNotFoundException(name)
   override fun list(path: String): Array<String> = emptyArray()
 }
-object StubResolver : android.content.ContentResolver()
+object StubResolver : android.content.ContentResolver() {
+  /** The provider's answer to a SIZE query: the length of the document it is serving. */
+  override fun query(
+    uri: android.net.Uri,
+    projection: Array<String>?,
+    selection: String?,
+    args: Array<String>?,
+    sort: String?,
+  ): android.database.Cursor? {
+    val size = document?.size?.toLong() ?: return null
+    return object : android.database.Cursor {
+      var first = true
+      override fun moveToFirst(): Boolean = first.also { first = false }
+      override fun moveToNext(): Boolean = false
+      override fun isNull(index: Int): Boolean = false
+      override fun getLong(index: Int): Long = size
+      override fun getInt(index: Int): Int = size.toInt()
+      override fun getString(index: Int): String? = null
+      override fun getColumnIndex(name: String): Int = 0
+      override fun close() {}
+    }
+  }
+}
 STUB
 
 python3 - "$OUT" <<'PYSPLIT'
@@ -400,6 +455,7 @@ import android.widget.SeekBar
 import org.shrek2.launcher.LauncherActivity
 import org.shrek2.launcher.Settings
 import harness.Strings
+import harness.StubResolver
 import java.io.File
 
 private var failures = 0
@@ -486,6 +542,48 @@ fun main(args: Array<String>) {
     check(intent.type == "*/*") { "the picker does not accept any file (type=${intent.type})" }
   }
 
+  // 4. The install path, driven through the same `content://` interface the phone uses. A disc image is
+  //    picked, the installer reads it *from the document* (no copy into the cache) and writes the game
+  //    files. The image comes from the corpus the installer test generates, so this covers the wiring:
+  //    document -> installer -> install directory.
+  val iso = File(args.getOrNull(1) ?: "/tmp/shrek2-launcher-disc.iso")
+  if (!iso.isFile) {
+    println("SKIP  the install path (no disc image at ${iso.path}; tools/installer-test.sh provides one)")
+  } else {
+  step("an ISO picked from the document is installed without being copied") {
+    check(iso.isFile) { "no disc image at ${iso.path}" }
+    check(!File(root, "cache/disc.iso").isFile) {
+      "the launcher copied the image into the cache (that copy is what truncated a 548 MB disc)"
+    }
+    StubResolver.document = iso.readBytes()
+    StubResolver.stopsAfter = -1
+    check(activity.installForTest(android.net.Uri.parse("content://test/disc.iso")) == null) { "the install failed" }
+    val exe = File(root, "install/Game/Shrek 2.exe")
+    check(exe.isFile) { "the game was not installed from the document" }
+    check(File(root, "install/Game/Chars/ogre.tex").isFile) { "the cabinet was not unpacked" }
+  }
+
+  step("a document that stops early is reported as incomplete, by name") {
+    val target = File(root, "install").apply { deleteRecursively(); mkdirs() }
+    StubResolver.document = iso.readBytes()
+    // The provider stops handing out bytes well inside the image: the shape of what the phone hit, where a
+    // 548 MB disc reached the installer as a 20 MB file. (The corpus is small, so the cut is a fraction of
+    // it -- what matters is that it lands inside a member the install has to read.)
+    StubResolver.stopsAfter = iso.length() / 3
+    val message = try {
+      activity.installForTest(android.net.Uri.parse("content://test/disc.iso"))
+    } finally {
+      StubResolver.stopsAfter = -1
+    }
+    val m = message ?: throw IllegalStateException("the short document was accepted")
+    println("     reported: ${m.take(120)}")
+    check(m.contains("incomplete") || m.contains("truncated")) { "unclear message: $m" }
+    check(!m.contains("outside source")) { "raw bounds failure: $m" }
+    check(!File(target, "Game/Shrek 2.exe").isFile) { "a short document produced an install" }
+    target.deleteRecursively()
+  }
+  }
+
   println(if (failures == 0) "ok: the launcher starts and works (no crash paths found)" else "FAILED ($failures problems)")
   if (failures != 0) kotlin.system.exitProcess(1)
 }
@@ -494,6 +592,7 @@ HARNESS
 SOURCES=$(find android/app/src/main/java/org/shrek2/launcher/install -name '*.kt' | sort)
 SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/LauncherActivity.kt"
 SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/Settings.kt"
+SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/ContentSource.kt"
 SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/Registry.kt"
 # `InstallFiles.kt` is left out on purpose: it is a JNI facade (`System.loadLibrary`), replaced by the
 # stand-in above. Everything else on the start-up path is the real code.

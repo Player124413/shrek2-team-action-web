@@ -131,8 +131,11 @@ document has no positional reads, and the installer needs random access), then r
 
 The Kotlin code is a port of `installer/src/` (the TypeScript installer the web build uses), and the two
 are held together by `tools/installer-test.sh`: it generates a synthetic disc in the retail layout,
-installs it with the TypeScript implementation, and requires the Kotlin one to reproduce every file and
-every digest. That check runs on every push, in the `checks` job.
+installs it with the TypeScript implementation, requires the Kotlin one to reproduce every file and every
+digest, then installs it *through the launcher* from a `content://` document and checks that a provider
+which stops early is reported as an incomplete file. Cut-off images (a whole sector missing, a 48-byte
+short tail, a cut inside a directory) must each be rejected by name. That check runs on every push, in
+the `checks` job.
 
 Graphics settings (resolution, shadows, anti-aliasing, distance clipping, view distance) are on the same
 screen: they are written into `registry.txt`, the file the runtime's registry HLE reads, so the game
@@ -213,9 +216,11 @@ complete — see `recomp/src/translate.ts`).
 ## How a launch works
 
 1. `LauncherActivity` finds `files/install/Game/Shrek 2.exe`. If it is missing, "Install from your own
-   disc" asks for the ISO image of the player's disc, streams it into `files/cache/disc.iso` (a
-   `content://` document has no positional reads), installs the game out of it with `install/`, and
-   deletes the copy. Nothing is uploaded; the image never leaves the device.
+   disc" asks for the ISO image of the player's disc and installs the game out of it with `install/`.
+   The image is *not* copied first: `ContentSource` reads it through the document provider in 64 KiB
+   windows (`openInputStream` + `skip`), so a 548 MB disc needs no space in the cache and cannot be
+   silently truncated on the way in -- an earlier version copied it, and a copy that stopped early made a
+   548 MB disc look like a 20 MB one. Nothing is uploaded; the image never leaves the device.
 2. `GameActivity` creates the surface, unpacks `game.sk2a`/`game.skx` from the APK into `files/cache/`
    and calls `nativeStart(filesDir)`.
 3. `game_main.cpp` waits for the surface, maps the guest address space (`GUEST_BASE=0`, so the

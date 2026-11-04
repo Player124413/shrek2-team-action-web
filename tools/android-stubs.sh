@@ -258,6 +258,7 @@ PY
 SOURCES=$(find android/app/src/main/java/org/shrek2/launcher/install -name '*.kt' | sort)
 SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/LauncherActivity.kt"
 SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/Settings.kt"
+SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/ContentSource.kt"
 SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/Registry.kt"
 SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/InstallFiles.kt"
 echo "kotlin: $(echo "$SOURCES" | wc -w) files"

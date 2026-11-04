@@ -129,3 +129,4 @@ object Bytes {
     return latin1(b, o, e)
   }
 }
+

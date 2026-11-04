@@ -224,8 +224,12 @@ class LauncherActivity : AppCompatActivity() {
   }
 
   /**
-   * Copy the image into the cache directory, then install from it. Both halves run on a worker thread;
-   * the UI thread only sees the progress bar and the final message.
+   * Install straight out of the document the player picked. Nothing is copied: the disc image is read
+   * through [ContentSource], which asks the provider for windows of it, so a 548 MB image needs no space
+   * in the cache and cannot be silently truncated on the way (the copy that did exactly that is what made
+   * a 548 MB disc look like a 20 MB one).
+   *
+   * Everything runs on a worker thread; the UI thread only sees the progress bar and the result.
    */
   private fun installDisc(uri: Uri) {
     installing = true
@@ -233,96 +237,80 @@ class LauncherActivity : AppCompatActivity() {
     progress.visibility = View.VISIBLE
     progress.progress = 0
     progressText.visibility = View.VISIBLE
-    progressText.text = getString(R.string.install_copying)
+    progressText.text = getString(R.string.install_scanning)
 
     Thread {
-      val image = File(cacheDir, "disc.iso")
-      var failure: String? = null
-      try {
-        val total = contentSize(uri)
-        var copied = 0L
-        contentResolver.openInputStream(uri)?.use { input ->
-          image.outputStream().use { out ->
-            val buffer = ByteArray(1 shl 20)
-            while (true) {
-              val n = input.read(buffer)
-              if (n <= 0) break
-              out.write(buffer, 0, n)
-              copied += n
-              if (total > 0) main {
-                progress.progress = (copied * 40 / total).toInt() // the copy is the first 40 %
-                progressText.text = getString(R.string.install_copying_percent, (copied * 100 / total).toInt())
-              }
-            }
-          }
-        } ?: throw IllegalStateException("cannot open the selected file")
-
-        // The copy is the one step that can silently produce a shorter file on a phone: a provider can
-        // stop early (a cancelled download, a background limit, an exhausted quota). The disc image's
-        // own length is known, and an installer failure 200 MB later would blame the wrong thing.
-        if (total > 0 && copied != total) {
-          throw IllegalStateException(
-            getString(R.string.install_copy_incomplete, copied, total),
-          )
-        }
-
-        val root = InstallFiles.installDir(this)
-        root.mkdirs()
-        var summary: String? = null
-        val source = FileSource(image)
-        try {
-          val disc = Installer.openDisc(source)
-          val report = Installer.install(disc, DirSink(root)) { p ->
-            val done = if (p.total > 0) 40 + p.done * 60 / p.total else 40
-            main {
-              progress.progress = done
-              progressText.text = when (p.phase) {
-                Installer.Phase.SCAN -> getString(R.string.install_scanning)
-                else -> getString(R.string.install_writing, p.done, p.total)
-              }
-            }
-          }
-          summary = report.summary()
-          // Files that did not match the disc's own checksums: report them, but keep the install --
-          // the sizes are checked too, so what is there is complete, and the player may still play.
-          if (report.mismatches.isNotEmpty()) {
-            val warnings = getString(R.string.install_warnings, report.mismatches.take(3).joinToString("; "))
-            main { progressText.text = warnings }
-          }
-        } finally {
-          source.close()
-        }
-        // The disc's own registry rows describe the Windows install (paths under C:), the game's
-        // settings the launcher writes are the ones that matter here. The install directory and the
-        // cache are created either way, so the game can start as soon as it is compiled.
-        InstallFiles.prepare(this)
-        loadGraphics()
-        val done = summary ?: getString(R.string.install_done)
-        main { progressText.text = done }
-      } catch (e: Exception) {
-        failure = e.message ?: e.toString()
-      } finally {
-        image.delete() // never keep a copy of the player's disc
-      }
-      main {
-        installing = false
-        install.isEnabled = true
-        progress.visibility = View.GONE
-        if (failure != null) {
-          progressText.text = getString(R.string.install_failed, failure)
-        }
-        refresh()
-      }
+      installFrom(uri) { failure -> lastError = failure }
     }.start()
   }
 
-  private fun contentSize(uri: Uri): Long = runCatching {
-    contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
-      if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else 0L
-    } ?: 0L
-  }.getOrDefault(0L)
+  private var lastError: String? = null
+
+  /** The install itself; [onDone] receives the error message, or null when it succeeded. */
+  private fun installFrom(uri: Uri, onDone: (String?) -> Unit) {
+    var failure: String? = null
+    var summary: String? = null
+    val source = ContentSource(contentResolver, uri)
+    try {
+      val root = InstallFiles.installDir(this)
+      root.mkdirs()
+      val disc = Installer.openDisc(source)
+      val report = Installer.install(disc, DirSink(root)) { p ->
+        val done = if (p.total > 0) p.done * 100 / p.total else 0
+        main {
+          progress.progress = done
+          progressText.text = when (p.phase) {
+            Installer.Phase.SCAN -> getString(R.string.install_scanning)
+            else -> getString(R.string.install_writing, p.done, p.total)
+          }
+        }
+      }
+      summary = report.summary()
+      // Files that did not match the disc's own checksums: report them, but keep the install -- the sizes
+      // are compared too, so what is there is complete and the player can still play.
+      if (report.mismatches.isNotEmpty()) {
+        val warnings = getString(R.string.install_warnings, report.mismatches.take(3).joinToString("; "))
+        main { progressText.text = warnings }
+      }
+      // The disc's own registry rows describe the Windows install (paths under C:), the game's settings
+      // the launcher writes are the ones that matter here. The install directory and the cache are
+      // created either way, so the game can start as soon as it is compiled.
+      InstallFiles.prepare(this)
+      loadGraphics()
+    } catch (e: Exception) {
+      failure = e.message ?: e.toString()
+    } finally {
+      source.close()
+    }
+    val done = summary ?: getString(R.string.install_done)
+    onDone(failure)
+    main {
+      installing = false
+      install.isEnabled = true
+      progress.visibility = View.GONE
+      if (failure != null) {
+        progressText.text = getString(R.string.install_failed, failure)
+      } else {
+        progressText.text = done
+      }
+      refresh()
+    }
+  }
 
   private fun main(block: () -> Unit) = runOnUiThread(block)
+
+  /**
+   * Runs one install synchronously and returns the error message, or null.
+   *
+   * Used by `tools/android-stubs-runtime.sh`: the launcher's install path (document -> installer ->
+   * install directory) is the part a phone exercised, and a worker thread with a progress bar is not
+   * something a JVM harness can wait for. The production path is [installDisc].
+   */
+  internal fun installForTest(uri: Uri): String? {
+    var error: String? = null
+    installFrom(uri) { error = it }
+    return error
+  }
 
   private var installing = false
 

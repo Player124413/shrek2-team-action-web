@@ -50,4 +50,10 @@ STDLIB="$(dirname "$(readlink -f "$KOTLINC")")/../lib/kotlin-stdlib.jar"
 [ -f "$STDLIB" ] || STDLIB=""
 java -cp "$OUT/installer.jar${STDLIB:+:$STDLIB}" org.shrek2.launcher.install.InstallerCheck "$OUT"
 
+echo "== launcher: installing the corpus from a content:// document =="
+# The same image, but through the screen a player uses: the launcher must read it out of the document it
+# was given (not copy it first -- a silent short copy of a 548 MB disc is what broke a real install) and
+# write the game files. This also fails if the launcher ever stops asking for the image itself.
+KOTLINC="$KOTLINC" "$ROOT/tools/android-stubs-runtime.sh" "$OUT/shrek2.iso"
+
 echo "ok: the disc installer works in both implementations"
