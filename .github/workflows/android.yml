@@ -301,7 +301,7 @@ jobs:
             echo "| | |"
             echo "| --- | --- |"
             echo "| version | ${{ steps.version.outputs.name }} (${{ steps.version.outputs.code }}) |"
-            echo "| signed with | ${{ steps.keystore.outputs.signed }} key ($(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' sign.txt | cut -c1-16)...) |"
+            echo "| requested key | ${{ steps.keystore.outputs.signed }} |"
             echo "| triggering ref | \`${{ github.ref }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
           ls -l android/app/build/outputs/apk/release/ || true
@@ -324,6 +324,8 @@ jobs:
           if ! grep -q "Signer #1 certificate SHA-256 digest" sign.txt; then
             echo "::error title=the APK is unsigned::no signer certificate in the APK"; exit 1
           fi
+          cert="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' sign.txt | head -1)"
+          echo "SIGNATURE ok: $(grep -c "^Verified using v[23] scheme" sign.txt) scheme(s), cert ${cert:0:16}..."
           # The native library is what makes the APK an app at all.
           if ! unzip -l "$APK" | grep -qE "lib/arm64-v8a/libshrek2\.so"; then
             echo "::error::the APK has no arm64 native library"; unzip -l "$APK" | head -20 | sed 's/^/::error::'; exit 1
@@ -337,8 +339,10 @@ jobs:
           # The image is optional in a fork without the reference executable, so only warn.
           unzip -l "$APK" | grep -E "assets/game\.sk2a" || echo "::warning::the APK carries no AOT image"
           sha="$(sha256sum "$APK" | cut -d" " -f1)"
-          echo "APK_RESULT name=$(basename "$APK") size=$(stat -c%s "$APK") sha256=$sha"
+          echo "APK_RESULT name=$(basename "$APK") size=$(stat -c%s "$APK") sha256=$sha cert=$cert"
           {
+            echo "| file | $(basename "$APK") ($(du -h "$APK" | cut -f1)) |"
+            echo "| certificate | ${cert:0:16}... |"
             echo "| sha256 | $sha |"
             echo "| native | arm64-v8a/libshrek2.so |"
             echo "| image | $(unzip -l "$APK" | grep -cE "assets/game\.sk2a") packaged |"
