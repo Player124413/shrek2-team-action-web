@@ -9,6 +9,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 VERSION="${FFMPEG_VERSION:-7.1.1}"
+export FFMPEG_VERSION="$VERSION"
 OUT="$ROOT/work/tools/ffmpeg-android"
 
 if [ -f "$OUT/lib/libavcodec.a" ]; then
@@ -25,12 +26,34 @@ fi
 [ -n "${ANDROID_NDK_HOME:-}" ] && [ -d "$ANDROID_NDK_HOME" ] \
   || { echo "no NDK installed under the SDK; install it first" >&2; exit 1; }
 
+# Everything lives under work/tools, which is what the workflow caches.
 SRC_DIR="$ROOT/work/tools/ffmpeg-src"
 mkdir -p "$SRC_DIR"
-if [ ! -d "$SRC_DIR/ffmpeg-$VERSION" ]; then
-  echo "== fetching FFmpeg $VERSION =="
-  curl -fsSL "https://ffmpeg.org/releases/ffmpeg-$VERSION.tar.xz" -o "$SRC_DIR/ffmpeg.tar.xz"
-  tar -xJf "$SRC_DIR/ffmpeg.tar.xz" -C "$SRC_DIR"
-fi
 
-"$ROOT/tools/build-ffmpeg-android.sh" "$SRC_DIR/ffmpeg-$VERSION"
+# ffmpeg.org refuses connections often enough (one build in three failed on a connect timeout), and a
+# release build must not depend on one host: try both, each a few times, before giving up.
+if [ ! -d "$SRC_DIR/ffmpeg-$VERSION" ] && [ ! -d "$SRC_DIR/FFmpeg-n$VERSION" ]; then
+  echo "== fetching FFmpeg $VERSION =="
+  got=0
+  for url in "https://ffmpeg.org/releases/ffmpeg-$VERSION.tar.xz" \
+             "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n$VERSION.tar.gz"; do
+    for attempt in 1 2 3; do
+      echo "   $url (attempt $attempt)"
+      if curl -fsSL --connect-timeout 20 --max-time 600 --retry 2 --retry-all-errors "$url" -o "$SRC_DIR/ffmpeg.tar"; then
+        got=1
+        break 2
+      fi
+      sleep $((attempt * 5))
+    done
+  done
+  [ "$got" = 1 ] || { echo "could not download FFmpeg $VERSION from any mirror" >&2; exit 1; }
+  tar -xf "$SRC_DIR/ffmpeg.tar" -C "$SRC_DIR"
+  rm -f "$SRC_DIR/ffmpeg.tar"
+fi
+# The GitHub archive keeps the git tree, where configure may not be executable.
+SRC_TREE="$SRC_DIR/ffmpeg-$VERSION"
+[ -d "$SRC_TREE" ] || SRC_TREE="$SRC_DIR/FFmpeg-n$VERSION"
+chmod +x "$SRC_TREE/configure" 2>/dev/null || true
+
+echo "   source: $SRC_TREE"
+"$ROOT/tools/build-ffmpeg-android.sh" "$SRC_TREE"

@@ -201,7 +201,9 @@ jobs:
         with:
           # Video playback links libavcodec, exactly like the desktop build. Cached: it is the slowest
           # step here and changes only when the FFmpeg version or the NDK revision changes.
-          path: work/tools/ffmpeg-android
+          # One path, so the downloaded source is cached with the result: a build that has to retry the
+          # download does not have to do it again on the next run.
+          path: work/tools
           key: ffmpeg-android-${{ env.FFMPEG_VERSION }}-${{ env.NDK_VERSION }}
 
       - name: FFmpeg for arm64 (Bink decoders)
