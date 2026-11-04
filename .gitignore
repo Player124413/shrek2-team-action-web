@@ -22,6 +22,11 @@ web/public/engine/
 
 # Android: Gradle/NDK outputs, the AOT image (built from the user's own executable) and the side table.
 android/local.properties
+# Release signing: the key that lets an APK update an installed copy. Losing it forces every player to
+# reinstall; leaking it lets anyone publish updates. Neither belongs in the repository.
+*.jks
+*.keystore
+android/keystore.properties
 android/.gradle/
 android/app/.cxx/
 android/app/build/

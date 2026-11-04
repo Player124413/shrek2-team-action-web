@@ -15,9 +15,14 @@ object InstallFiles {
   /** Relative path of the executable, the marker every other file is optional around. */
   const val GAME_EXE = "Game/Shrek 2.exe"
 
-  fun installDir(context: Context): File = File(context.filesDir, "install")
+  /**
+   * `noBackup`, not `files`: an APK update keeps `files/` as it is, and so does this. Putting the game
+   * there would also ship several gigabytes to Google's backup servers on every reinstall; game data is
+   * the player's own and stays on the device.
+   */
+  fun installDir(context: Context): File = File(context.noBackupFilesDir, "install")
 
-  fun cacheDir(context: Context): File = File(context.filesDir, "cache")
+  fun cacheDir(context: Context): File = File(context.noBackupFilesDir, "cache")
 
   /** True once the game's own executable is present: the launcher shows the game instead of the wizard. */
   fun installed(context: Context): Boolean = File(installDir(context), GAME_EXE).isFile
@@ -32,16 +37,29 @@ object InstallFiles {
    */
   fun unpackImage(context: Context): Boolean {
     val target = cacheDir(context).apply { mkdirs() }
+    // The stamp records which packaged image was unpacked. Without it, a *newer* APK would keep serving
+    // the image of the previous one -- the image is built from the game executable, so a recompile must
+    // replace the cached copy. The version is the versionName, which changes with every release.
+    val stamp = File(target, "image.version")
+    val wanted = context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0"
+    if (stamp.isFile && stamp.readText() == wanted && File(target, "game.sk2a").isFile) return true
+
     var ok = true
     for (name in listOf("game.sk2a", "game.skx")) {
       val out = File(target, name)
-      if (out.isFile && out.length() > 0) continue
+      if (out.isFile) out.delete()
       ok = runCatching {
         context.assets.open(name).use { input -> out.outputStream().use { input.copyTo(it) } }
         true
       }.getOrDefault(false) && ok
     }
-    return ok && File(target, "game.sk2a").isFile
+    if (ok) {
+      stamp.writeText(wanted)
+      // The registry (settings and key bindings) is the game's, not the image's: it survives.
+      return true
+    }
+    // No image packaged (a build made without one): keep whatever is cached, the launcher explains it.
+    return File(target, "game.sk2a").isFile
   }
 
   fun prepare(context: Context): Boolean {

@@ -1,6 +1,43 @@
+import java.util.Properties
+
 plugins {
   id("com.android.application")
   id("org.jetbrains.kotlin.android")
+}
+
+/**
+ * Release signing.
+ *
+ * "Updating the app must not wipe the player's game" is a signing property, not a code one: Android
+ * only replaces an installed app when the new APK carries the *same* signing key and a higher
+ * versionCode. So the release build always uses one stable keystore:
+ *
+ *   1. android/keystore.properties (git-ignored) if it exists -- what a local machine uses;
+ *   2. the SHREK2_KEYSTORE / SHREK2_KEYSTORE_PASSWORD / SHREK2_KEY_ALIAS / SHREK2_KEY_PASSWORD
+ *      environment variables -- what CI uses, and where the keystore + password come from secrets;
+ *   3. otherwise an unsigned build is produced (a debug-signed APK can never update a release one).
+ *
+ * See android/README.md ("Updating in place") for how the key is created and kept.
+ */
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+  if (keystorePropertiesFile.isFile) keystorePropertiesFile.inputStream().use { load(it) }
+}
+fun signingValue(key: String, env: String): String? =
+  keystoreProperties.getProperty(key) ?: System.getenv(env)
+
+val storeFilePath = signingValue("storeFile", "SHREK2_KEYSTORE")
+val releaseSigning = storeFilePath?.let { path ->
+  signingConfigs.create("release") {
+    storeFile = file(path)
+    storePassword = signingValue("storePassword", "SHREK2_KEYSTORE_PASSWORD")
+    keyAlias = signingValue("keyAlias", "SHREK2_KEY_ALIAS")
+    keyPassword = signingValue("keyPassword", "SHREK2_KEY_PASSWORD")
+    // v1 is not needed for Android 8+; v2/v3 are what keep an update "the same app".
+    enableV1Signing = false
+    enableV2Signing = true
+    enableV3Signing = true
+  }
 }
 
 android {
@@ -13,8 +50,11 @@ android {
     // GLES 3.0 + AAudio (low-latency stream builder): Android 8.0.
     minSdk = 26
     targetSdk = 35
-    versionCode = 1
-    versionName = "0.1"
+    // `versionCode` must increase for Android to *update* an installed app (an equal or lower code is
+    // rejected by the installer, and a different signing key is rejected outright). CI overrides both
+    // from the git tag / run number; see .github/workflows/android.yml.
+    versionCode = (System.getenv("SHREK2_VERSION_CODE") ?: "1").toInt()
+    versionName = System.getenv("SHREK2_VERSION_NAME") ?: "0.1"
 
     ndk {
       // The AOT compiler emits AArch64 only, and the runtime is built for arm64-v8a.
@@ -42,6 +82,12 @@ android {
     release {
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+      if (releaseSigning != null) signingConfig = releaseSigning
+    }
+    debug {
+      // A debug build installs side by side with a release one but cannot update it: different key.
+      applicationIdSuffix = ".debug"
+      versionNameSuffix = "-debug"
     }
   }
 

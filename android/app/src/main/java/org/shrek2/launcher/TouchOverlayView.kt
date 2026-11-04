@@ -65,13 +65,22 @@ class TouchOverlayView(context: Context) : View(context) {
     typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
   }
 
-  /** Menu button (Escape), always present; the numeric keys double as camera controls. */
+  /**
+   * The default pad. Actions go out as *gamepad buttons* (the PAD_VK_* codes), not as keyboard keys:
+   * a 2004 PC game reads its movement from DirectInput's pad state, and the on-screen controller has
+   * to be that pad -- the same path a Bluetooth controller takes. Menu actions stay keyboard keys
+   * (Escape/Enter), because the game's own menus are keyboard/pointer driven.
+   */
   private val defaults = listOf(
-    Control("A", 0.90f, 0.80f, 0.075f, VK_SPACE),
-    Control("B", 0.79f, 0.90f, 0.065f, VK_RETURN),
-    Control("C", 0.96f, 0.60f, 0.055f, VK_SHIFT),
-    Control("MENU", 0.04f, 0.10f, 0.05f, VK_ESCAPE),
-    Control("CAM", 0.07f, 0.90f, 0.045f, 'C'.code),
+    Control("A", 0.90f, 0.78f, 0.075f, NativeInput.PAD_VK_A),
+    Control("B", 0.79f, 0.89f, 0.062f, NativeInput.PAD_VK_B),
+    Control("X", 0.975f, 0.66f, 0.055f, NativeInput.PAD_VK_X),
+    Control("Y", 0.83f, 0.63f, 0.055f, NativeInput.PAD_VK_Y),
+    Control("LB", 0.90f, 0.42f, 0.05f, NativeInput.PAD_VK_LB),
+    Control("RB", 0.97f, 0.37f, 0.05f, NativeInput.PAD_VK_RB),
+    Control("START", 0.55f, 0.90f, 0.05f, NativeInput.PAD_VK_START),
+    Control("MENU", 0.045f, 0.10f, 0.048f, VK_ESCAPE),
+    Control("PAD", 0.145f, 0.10f, 0.048f, NativeInput.VK_TOGGLE_OVERLAY),
   )
 
   init {
@@ -85,6 +94,7 @@ class TouchOverlayView(context: Context) : View(context) {
 
   // ---- Bindings --------------------------------------------------------------------------------
 
+  // Player preferences, not game data: `files/` survives updates and is restored on a new device.
   private fun bindingFile(): File = File(context.filesDir, "touch-bindings.json")
 
   fun loadBindings() {
@@ -114,21 +124,52 @@ class TouchOverlayView(context: Context) : View(context) {
 
   override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
     super.onSizeChanged(w, h, oldw, oldh)
-    val unit = minOf(w, h).toFloat()
+    applyLayout(w, h)
+    // A hidden overlay shrinks to 0x0, which would collapse every hit rectangle; the layout is
+    // restored from the measured size when it comes back (see [setOverlayVisible]).
+    if (w > 0 && h > 0) lastWidth = w.also { lastHeight = h }
+  }
+
+  /**
+   * Places the controls from the *screen* size rather than the view's own: in "overlay hidden" mode
+   * the game sees the whole screen as one pointer, and the on-screen controls (Escape, the menu
+   * button) must still be tappable at the same coordinates.
+   */
+  private fun applyLayout(w: Int, h: Int) {
+    val width = if (w > 0) w else lastWidth
+    val height = if (h > 0) h else lastHeight
+    if (width <= 0 || height <= 0) return
+    val unit = minOf(width, height).toFloat()
     for (c in controls) {
-      c.touch.set(c.cx * w - unit * c.radius, c.cy * h - unit * c.radius, c.cx * w + unit * c.radius, c.cy * h + unit * c.radius)
+      c.touch.set(
+        c.cx * width - unit * c.radius,
+        c.cy * height - unit * c.radius,
+        c.cx * width + unit * c.radius,
+        c.cy * height + unit * c.radius,
+      )
     }
-    // Left thumb: an eight-way d-pad, laid out as two overlapping rings (up/down and left/right) so
-    // diagonals are reachable without lifting the finger.
+    // Left thumb: a one-thumb d-pad. Diagonals come from the eight-way direction test in [handleDpad].
     dpad.touch.set(0f, 0f, unit * 0.55f, unit * 0.55f)
-    val density = resources.displayMetrics.density
-    text.textSize = 14f * density
+    text.textSize = 14f * resources.displayMetrics.density
+  }
+
+  /**
+   * Turns the virtual pad off without losing the layout.
+   *
+   * Toggling [isEnabled] instead of visibility matters: a GONE view is not laid out at all, and the
+   * overlay's job in "hidden" mode is still to forward touches to the game as pointer input.
+   */
+  fun setOverlayVisible(visible: Boolean) {
+    overlayVisible = visible
+    applyLayout(lastWidth, lastHeight)
+    invalidate()
   }
 
   override fun onDraw(canvas: Canvas) {
     super.onDraw(canvas)
     paint.style = Paint.Style.FILL
     for (c in controls) {
+      if (!overlayVisible && !isPinned(c)) continue
       paint.color = if (c.pointer >= 0) 0x88FFD54F.toInt() else 0x44FFFFFF
       canvas.drawOval(c.touch, paint)
       paint.style = Paint.Style.STROKE
@@ -138,7 +179,7 @@ class TouchOverlayView(context: Context) : View(context) {
       paint.style = Paint.Style.FILL
       canvas.drawText(NativeInput.keyLabel(c.vk), c.touch.centerX(), c.touch.centerY() + text.textSize / 3, text)
     }
-    drawDpad(canvas)
+    if (overlayVisible) drawDpad(canvas)
   }
 
   private fun drawDpad(canvas: Canvas) {
@@ -207,6 +248,10 @@ class TouchOverlayView(context: Context) : View(context) {
     return true
   }
 
+  /** True while the virtual pad is drawn and tappable; false forwards every touch to the game. */
+  private var overlayVisible = true
+  private var lastWidth = 0
+  private var lastHeight = 0
   private var lastX = 0f
   private var lastY = 0f
   /** Where and when the primary finger went down, to tell a tap (a click) from a drag (a look). */
@@ -227,12 +272,17 @@ class TouchOverlayView(context: Context) : View(context) {
         handleDpad(id, x, y, up)
         continue
       }
-      val hit = controls.find { it.touch.contains(x, y) }
+      val hit = controls.find { (overlayVisible || isPinned(it)) && it.touch.contains(x, y) }
       if (hit != null) press(hit, id, up)
     }
   }
 
-  private fun onControl(x: Float, y: Float): Boolean = dpad.touch.contains(x, y) || controls.any { it.touch.contains(x, y) }
+  /** Controls that stay available while the pad is hidden (the way back to it). */
+  private fun isPinned(c: Control): Boolean = c.vk == NativeInput.VK_TOGGLE_OVERLAY
+
+  private fun onControl(x: Float, y: Float): Boolean =
+    controls.any { (overlayVisible || isPinned(it)) && it.touch.contains(x, y) } ||
+      (overlayVisible && dpad.touch.contains(x, y))
 
   private fun press(c: Control, pointer: Int, up: Boolean) {
     if (up) {

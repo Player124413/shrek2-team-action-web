@@ -104,6 +104,11 @@ const KeyMap kKeys[] = {
     {0x7b, 0x58},
 };
 
+// Virtual-key codes the overlay uses for gamepad buttons (see NativeInput.kt).
+constexpr uint32_t kPadVkA = 0x1000, kPadVkB = 0x1001, kPadVkX = 0x1002, kPadVkY = 0x1003;
+constexpr uint32_t kPadVkLb = 0x1004, kPadVkRb = 0x1005, kPadVkLt = 0x1006, kPadVkRt = 0x1007;
+constexpr uint32_t kPadVkStart = 0x1008, kPadVkBack = 0x1009;
+
 uint8_t g_keys[256];  // 256 DirectInput scan codes, 0x80 set while held
 GamepadState g_pads[kMaxGamepads];
 float g_rumble[kMaxGamepads][2];
@@ -124,6 +129,27 @@ uint64_t now_ms() {
   timespec ts{};
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (uint64_t)ts.tv_sec * 1000u + (uint64_t)(ts.tv_nsec / 1000000);
+}
+
+/**
+ * Virtual-key codes above the Win32 range are not keys but *gamepad buttons* the touch overlay emits:
+ * a virtual pad has to reach the game exactly where a real pad does, since the game reads its movement
+ * from DirectInput. Returns the `plat::PadButton` bit, or 0 when `vk` is an ordinary key.
+ */
+uint32_t virtualPadButton(uint32_t vk) {
+  switch (vk) {
+    case kPadVkA: return PadA;
+    case kPadVkB: return PadB;
+    case kPadVkX: return PadX;
+    case kPadVkY: return PadY;
+    case kPadVkLb: return PadLB;
+    case kPadVkRb: return PadRB;
+    case kPadVkLt: return PadLT;
+    case kPadVkRt: return PadRT;
+    case kPadVkStart: return PadStart;
+    case kPadVkBack: return PadBack;
+    default: return 0;
+  }
 }
 
 /** Set-1 scancode for a Windows virtual-key code (what DirectInput reports for that key). */
@@ -350,7 +376,7 @@ bool audio_open(int rate, void (*render)(float* out, int frames)) {
     return false;
   }
   aaudio_stream_builder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
-  aaudio_stream_builder_setFormat(builder, AAUDIO_FORMAT_FLOAT_PCM);
+  aaudio_stream_builder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
   aaudio_stream_builder_setSampleRate(builder, rate);
   aaudio_stream_builder_setChannelCount(builder, 2);
   aaudio_stream_builder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
@@ -406,8 +432,16 @@ JNIEXPORT void JNICALL Java_org_shrek2_launcher_GameActivity_nativeSurfaceSize(J
 // A virtual key from the touch overlay or a physical keyboard: `vk` is a Win32 virtual-key code.
 JNIEXPORT void JNICALL Java_org_shrek2_launcher_GameActivity_nativeKey(JNIEnv*, jclass, jint vk, jint action) {
   using namespace plat;
-  const uint32_t dik = scancodeFor(vk);
   const bool down = action != 0;  // 0 = up, 1 = down, 2 = repeat
+  // A virtual pad button is not a key: fold it into the pad state the HLE layer reads, so the game
+  // sees one controller no matter whether the input came from a pad or from the screen.
+  if (const uint32_t bit = virtualPadButton((uint32_t)vk)) {
+    GamepadState& pad = g_pads[0];
+    pad.connected = true;
+    pad.buttons = down ? (pad.buttons | bit) : (pad.buttons & ~bit);
+    return;
+  }
+  const uint32_t dik = scancodeFor(vk);
   InputEvent e{};
   e.kind = down ? InputEvent::KeyDown : InputEvent::KeyUp;
   e.vk = (uint32_t)vk;

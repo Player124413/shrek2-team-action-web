@@ -1,7 +1,6 @@
 package org.shrek2.launcher
 
 import android.os.Bundle
-import android.widget.FrameLayout
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -9,11 +8,13 @@ import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.ViewGroup
-import android.view.WindowInsets
-import android.view.WindowInsetsController
 import android.view.WindowManager
+import android.widget.FrameLayout
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 
 /**
  * The whole Android front end: a SurfaceView handed to EGL, the touch overlay on top of it, and the
@@ -31,6 +32,8 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    // Draw edge to edge under the cutout and the gesture bar: the game surface must fill the panel.
+    WindowCompat.setDecorFitsSystemWindows(window, false)
     hideSystemBars()
 
     surfaceView = SurfaceView(this).apply {
@@ -42,7 +45,13 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
       holder.setFormat(android.graphics.PixelFormat.RGBA_8888)
     }
     overlay = TouchOverlayView(this)
-    overlay.onKey = { vk, action -> nativeKey(vk, action) }
+    overlay.onKey = { vk, action ->
+      if (vk == NativeInput.VK_TOGGLE_OVERLAY) {
+        if (action == NativeInput.ACTION_DOWN) toggleOverlay()
+      } else {
+        nativeKey(vk, action)
+      }
+    }
     overlay.onMouseMove = { dx, dy -> nativeMouseMove(dx, dy) }
     overlay.onMouseButton = { button, action -> nativeMouseButton(button, action) }
     overlay.onPad = { slot, what, a, b -> nativePad(slot, what, a, b) }
@@ -70,8 +79,9 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
     nativeSurfaceSize(holder.surfaceFrame.width(), holder.surfaceFrame.height())
     // The image shipped inside the APK has to reach the cache directory before the loader runs.
     InstallFiles.unpackImage(this)
-    // The game thread waits for the surface (game_main.cpp); start it once there is one.
-    nativeStart(filesDir.absolutePath)
+    // Everything the runtime owns (install, cache, registry) lives in noBackupFilesDir, so an app
+    // update keeps it: Android only replaces the APK, never touches these directories.
+    nativeStart(noBackupFilesDir.absolutePath)
     surfaceView.requestFocus()
   }
 
@@ -107,11 +117,18 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
   // ---- Input -----------------------------------------------------------------------------------
 
+  private var overlayVisible = true
   private var gamepadButtons = 0
   private var gamepadSticks = floatArrayOf(0f, 0f, 0f, 0f)
   private var gamepadTriggers = floatArrayOf(0f, 0f)
 
   override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+    // The launcher's own key (F2 on a keyboard, the "PAD" button on the overlay): show or hide the
+    // on-screen pad without telling the game.
+    if (keyCode == KeyEvent.KEYCODE_F2) {
+      toggleOverlay()
+      return true
+    }
     // Controller buttons arrive as key events; their state is folded into the pad struct so the HLE
     // DirectInput layer sees one consistent device.
     if (isPadKey(keyCode)) {
@@ -234,11 +251,25 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
     }
   }
 
+  /**
+   * Shows or hides the on-screen pad. `/` is the standard "touch controls on/off" gesture on Android
+   * games, so both that and the launcher's pad button call this.
+   */
+  private fun toggleOverlay() {
+    overlayVisible = !overlayVisible
+    overlay.setOverlayVisible(overlayVisible)
+    if (!overlayVisible) overlay.releaseAll()
+    nativeFocus(true)
+  }
+
+  /**
+   * Immersive mode through the compat API: the plain `WindowInsetsController` is API 30, while the
+   * app supports Android 8, and `WindowCompat` picks the right implementation on both.
+   */
   private fun hideSystemBars() {
-    window.insetsController?.let {
-      it.hide(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
-      it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-    }
+    val controller = WindowCompat.getInsetsController(window, window.decorView)
+    controller.hide(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+    controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
   }
 
   private companion object {
@@ -315,7 +346,8 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
   private external fun nativeMouseMove(dx: Float, dy: Float)
   private external fun nativeMouseButton(button: Int, action: Int)
   private external fun nativeMouseTo(x: Int, y: Int)
-  private external fun nativeStart(filesDir: String)
+  /** `root` is noBackupFilesDir: install/, cache/ and registry.txt live there and survive updates. */
+  private external fun nativeStart(root: String)
 
   init {
     System.loadLibrary("shrek2")

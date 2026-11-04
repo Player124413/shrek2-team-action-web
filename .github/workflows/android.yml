@@ -1,0 +1,304 @@
+# Builds the Android APK.
+#
+# Four jobs, cheapest first, so a broken change fails in a minute instead of after a half-hour Gradle
+# build:
+#   checks         -- the AOT compiler's four test suites, the ETC2 transcoder, the native syntax check
+#   image          -- the AOT image for the reference executable (only when its hash is known)
+#   apk            -- Gradle + NDK build, signed with the project's release key
+#   release        -- on a tag: attach the APK to a GitHub release, after proving it installs as an
+#                     *update* over the previous one (same package, higher versionCode, same key)
+#
+# Secrets needed for a signed release build (Settings -> Secrets and variables -> Actions):
+#   SHREK2_KEYSTORE_BASE64     base64 of the release .jks (see android/README.md, "Updating in place")
+#   SHREK2_KEYSTORE_PASSWORD   keystore password
+#   SHREK2_KEY_ALIAS           key alias inside the keystore
+#   SHREK2_KEY_PASSWORD        key password
+# Without them the workflow still builds and uploads an *unsigned* APK as an artifact, and says so.
+name: Android APK
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Tests and static checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          python3 -m pip install unicorn capstone
+
+      - name: Encoder, code generator, module loader, optimiser
+        run: |
+          node aot/test/enc.test.mjs
+          node aot/test/arch.test.mjs
+          node aot/test/module.test.mjs
+          node aot/test/opt.test.mjs
+
+      - name: DXT -> ETC2 transcoder
+        run: tools/etc2-test.sh
+
+      - name: Native syntax check (no NDK needed)
+        run: tools/android-check.sh
+
+      - name: Lint the build scripts
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck -S warning tools/build-apk.sh tools/build-android.sh tools/android-version.sh \
+            tools/android-check.sh tools/android-release-notes.sh tools/etc2-test.sh tools/build-ffmpeg-android.sh
+
+      - name: Version numbers
+        run: |
+          # Every build has to be installable over the previous one, so the version code must be a
+          # positive number that grows with the history.
+          out="$(tools/android-version.sh)"
+          echo "version: $out"
+          code="${out%% *}"
+          [[ "$code" =~ ^[0-9]+$ ]] || { echo "versionCode is not numeric: $code"; exit 1; }
+          [ "$code" -gt 0 ] || { echo "versionCode must be positive"; exit 1; }
+          tagged="$(tools/android-version.sh v1.2.3)"
+          [ "${tagged%% *}" = "10203" ] || { echo "tag version scheme is wrong: $tagged"; exit 1; }
+
+  image:
+    name: AOT image
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+
+      # The image is built from the player's own executable, which is never in the repository. When the
+      # reference executable is not available (no secret, or the run is a pull request from a fork),
+      # the image job is skipped and the APK ships without one -- the launcher then says so instead of
+      # failing at start.
+      - name: Fetch the reference executable
+        id: exe
+        env:
+          SHREK2_EXE_BASE64: ${{ secrets.SHREK2_EXE_BASE64 }}
+        run: |
+          if [ -z "${SHREK2_EXE_BASE64:-}" ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mkdir -p work/reference
+          echo "$SHREK2_EXE_BASE64" | base64 -d > "work/reference/Shrek 2.exe"
+          echo "found=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build and check the image
+        if: steps.exe.outputs.found == 'true'
+        run: |
+          meta="$(ls metadata/*.json | head -1)"
+          node aot/cli.ts image "work/reference/Shrek 2.exe" --meta "$meta" --out work/aot
+          node aot/cli.ts check work/aot
+
+      - uses: actions/upload-artifact@v4
+        if: steps.exe.outputs.found == 'true'
+        with:
+          name: aot-image
+          path: |
+            work/aot/game.sk2a
+            work/aot/game.skx
+            work/aot/aot.txt
+          retention-days: 7
+
+  apk:
+    name: Build APK
+    needs: [checks, image]
+    # `image` is skipped when there is no reference executable; that must not block the APK.
+    if: always() && needs.checks.result == 'success' && (needs.image.result == 'success' || needs.image.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      FFMPEG_VERSION: '7.1.1'
+      NDK_VERSION: '27.0.12077973'
+    outputs:
+      version_code: ${{ steps.version.outputs.code }}
+      version_name: ${{ steps.version.outputs.name }}
+      signed: ${{ steps.keystore.outputs.signed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # tags and history: the version code is derived from them
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android SDK and NDK
+        run: |
+          # The NDK version is pinned in android/app/build.gradle.kts; the runner's SDK ships with the
+          # command line tools that install it.
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-35" "build-tools;35.0.0" "ndk;$NDK_VERSION" "cmake;3.22.1" > /dev/null
+
+      - name: Version
+        id: version
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          [[ "$tag" == v* ]] || tag=""
+          read -r code name <<<"$(tools/android-version.sh "$tag")"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "building $name ($code)"
+
+      - name: Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Cache FFmpeg for arm64
+        uses: actions/cache@v4
+        with:
+          # Video playback links libavcodec, exactly like the desktop build. Cached: it is the slowest
+          # step here and changes only when the FFmpeg version or the NDK revision changes.
+          path: work/tools/ffmpeg-android
+          key: ffmpeg-android-${{ env.FFMPEG_VERSION }}-${{ env.NDK_VERSION }}
+
+      - name: FFmpeg for arm64 (Bink decoders)
+        run: .github/scripts/fetch-ffmpeg-android.sh
+
+      - name: Release keystore
+        id: keystore
+        env:
+          SHREK2_KEYSTORE_BASE64: ${{ secrets.SHREK2_KEYSTORE_BASE64 }}
+          SHREK2_KEYSTORE_PASSWORD: ${{ secrets.SHREK2_KEYSTORE_PASSWORD }}
+          SHREK2_KEY_ALIAS: ${{ secrets.SHREK2_KEY_ALIAS }}
+          SHREK2_KEY_PASSWORD: ${{ secrets.SHREK2_KEY_PASSWORD }}
+        run: |
+          if [ -z "${SHREK2_KEYSTORE_BASE64:-}" ]; then
+            echo "No release keystore secret: building an unsigned APK (it cannot update an installed one)."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mkdir -p "$RUNNER_TEMP/keys"
+          echo "$SHREK2_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/keys/release.jks"
+          {
+            echo "storeFile=$RUNNER_TEMP/keys/release.jks"
+            echo "storePassword=$SHREK2_KEYSTORE_PASSWORD"
+            echo "keyAlias=$SHREK2_KEY_ALIAS"
+            echo "keyPassword=$SHREK2_KEY_PASSWORD"
+          } > android/keystore.properties
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: AOT image artifact
+        if: needs.image.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: aot-image
+          path: android/app/src/main/assets
+
+      - name: Assemble
+        env:
+          SHREK2_VERSION_CODE: ${{ steps.version.outputs.code }}
+          SHREK2_VERSION_NAME: ${{ steps.version.outputs.name }}
+          SHREK2_KEYSTORE: ${{ runner.temp }}/keys/release.jks
+        working-directory: android
+        run: ./gradlew --no-daemon --stacktrace assembleRelease
+
+      - name: Inspect the APK
+        run: |
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          "$BT/aapt2" dump badging "$APK" | grep -E "^package:|^native-code:"
+          if [ "${{ steps.keystore.outputs.signed }}" = "true" ]; then
+            "$BT/apksigner" verify --print-certs "$APK"
+          else
+            echo "unsigned build: skipping signature verification"
+          fi
+          unzip -l "$APK" | grep -E "lib/arm64-v8a/libshrek2\.so"
+          # The image is optional in a fork without the reference executable, so only warn.
+          unzip -l "$APK" | grep -E "assets/game\.sk2a" || echo "::warning::the APK carries no AOT image"
+          # Remove the keystore before anything is archived.
+          rm -f android/keystore.properties
+
+      - name: Rename
+        id: apk
+        run: |
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          OUT="shrek2-${{ steps.version.outputs.name }}.apk"
+          cp "$APK" "$OUT"
+          echo "path=$OUT" >> "$GITHUB_OUTPUT"
+          echo "$(sha256sum "$OUT")" > "$OUT.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: |
+            shrek2-*.apk
+            shrek2-*.apk.sha256
+          retention-days: 30
+
+  release:
+    name: Publish release
+    needs: apk
+    if: startsWith(github.ref, 'refs/tags/v') && needs.apk.outputs.signed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: apk
+
+      - name: Prove the APK installs as an update
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          PREV="$(gh release view --json tagName --jq .tagName 2>/dev/null | sed -n 's/^v//p' || true)"
+          PREV_FROM_TAGS="$(git tag --list 'v*' --sort=-v:refname | grep -v "^${GITHUB_REF_NAME}$" | head -1 || true)"
+          prev_code=""
+          if [ -n "$PREV_FROM_TAGS" ]; then
+            prev_code="$(tools/android-version.sh "$PREV_FROM_TAGS" | cut -d' ' -f1)"
+          fi
+          echo "previous tag: ${PREV_FROM_TAGS:-none} (versionCode ${prev_code:-unknown})"
+          tools/android-release-notes.sh shrek2-*.apk "${{ needs.apk.outputs.version_code }}" "$prev_code"
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes shrek2-*.apk shrek2-*.apk.sha256 --verify-tag \
+            || gh release upload "$GITHUB_REF_NAME" shrek2-*.apk shrek2-*.apk.sha256 --clobber

@@ -117,7 +117,7 @@ class LauncherActivity : AppCompatActivity() {
   private fun copyTree(uri: Uri) {
     compile.visibility = android.view.View.VISIBLE
     Thread {
-      val root = filesDir.absolutePath
+      val root = noBackupFilesDir.absolutePath
       var files = 0
       fun copy(dir: android.net.Uri, rel: String) {
         contentResolver.openFileDescriptor(dir, "r") // fails for a directory on some providers: ignore

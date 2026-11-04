@@ -35,16 +35,48 @@ CMake — so neither the Kotlin nor the C++ has been compiled or run here. What 
 To build:
 
 ```sh
+# 0. once: create the signing key (see "Updating in place" below)
+tools/android-keygen.sh
+
 # 1. NDK r26+ (set ANDROID_NDK_HOME), JDK 17, Android SDK with platform 35
 export ANDROID_NDK_HOME=$HOME/android-ndk-r27
 
 # 2. Bink decoders for arm64 (the runtime links them like the desktop build does)
 tools/build-ffmpeg-android.sh
 
-# 3. the AOT image for your own executable + the APK
-tools/build-android.sh --exe "/path/to/Shrek 2.exe" --meta metadata/<sha256>.json
+# 3. the AOT image for your own executable + the APK, with the update checks
+tools/build-apk.sh --exe "/path/to/Shrek 2.exe" --meta metadata/<sha256>.json
 adb install -r android/app/build/outputs/apk/release/app-release.apk
 ```
+
+CI does the same on every push (`.github/workflows/android.yml`): the tests and the native syntax check
+first, then the image, then the APK, and on a `v*` tag a release whose APK is proven to install as an
+update over the previous one. Run `node tools/check-workflows.mjs` after touching the workflow.
+
+## Updating in place
+
+An APK only *replaces* an installed app when three things hold; Android refuses everything else:
+
+| Requirement | Where it is enforced |
+| --- | --- |
+| same `applicationId` (`org.shrek2.launcher`) | `app/build.gradle.kts` |
+| strictly higher `versionCode` | `tools/android-version.sh` (tags: `v1.2.3` -> `10203`; dev: commit count) |
+| same signing certificate | `android/keystore.properties` / the `SHREK2_*` CI secrets |
+
+The key is created once (`tools/android-keygen.sh`, 4096-bit RSA, valid 10,000 days) and must be backed
+up: rotate it and every player has to uninstall, which also deletes their install and saves. CI compares
+the new APK's certificate with the last release's before publishing and fails the release if they differ.
+
+What an update does *not* lose:
+
+* the install and the AOT image: both live in `noBackupFilesDir` (`install/`, `cache/`), which Android
+  never touches on an update (and does not back up -- it is the player's own game data);
+* `registry.txt` (settings and key bindings) and `touch-bindings.json`;
+* the AOT image is re-unpacked only when the packaged one changed: `cache/image.version` holds the
+  versionName that produced it.
+
+A *debug* build is deliberately a different app (`applicationIdSuffix = ".debug"`), so testing a debug
+APK never uninstalls the release one.
 
 `--meta` is optional; without it the front end discovers functions itself (slower, slightly less
 complete — see `recomp/src/translate.ts`).

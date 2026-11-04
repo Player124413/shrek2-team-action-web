@@ -48,6 +48,25 @@ object NativeInput {
   const val VK_RIGHT = 0x27
   const val VK_DOWN = 0x28
 
+  /**
+   * Codes above the Win32 range, for actions the game has no key for. They travel through the same
+   * `nativeKey` call and the platform layer turns them into gamepad buttons (see
+   * `platform_android.cpp`), which is what lets a touch "A" work on a machine without a pad.
+   */
+  const val PAD_VK_A = 0x1000
+  const val PAD_VK_B = 0x1001
+  const val PAD_VK_X = 0x1002
+  const val PAD_VK_Y = 0x1003
+  const val PAD_VK_LB = 0x1004
+  const val PAD_VK_RB = 0x1005
+  const val PAD_VK_LT = 0x1006
+  const val PAD_VK_RT = 0x1007
+  const val PAD_VK_START = 0x1008
+  const val PAD_VK_BACK = 0x1009
+
+  /** Keyboard only, consumed by the launcher: shows/hides the on-screen pad. */
+  const val VK_TOGGLE_OVERLAY = 0x1100
+
   /** Human-readable name for a virtual-key code (overlay labels and the binding screen). */
   fun keyLabel(vk: Int): String = when {
     vk == VK_ESCAPE -> "ESC"
@@ -62,6 +81,17 @@ object NativeInput {
     vk == VK_DOWN -> "DOWN"
     vk in 'A'.code..'Z'.code || vk in '0'.code..'9'.code -> vk.toChar().toString()
     vk in 0x70..0x7b -> "F${vk - 0x6f}"
+    vk == PAD_VK_A -> "A"
+    vk == PAD_VK_B -> "B"
+    vk == PAD_VK_X -> "X"
+    vk == PAD_VK_Y -> "Y"
+    vk == PAD_VK_LB -> "LB"
+    vk == PAD_VK_RB -> "RB"
+    vk == PAD_VK_LT -> "LT"
+    vk == PAD_VK_RT -> "RT"
+    vk == PAD_VK_START -> "START"
+    vk == PAD_VK_BACK -> "BACK"
+    vk == VK_TOGGLE_OVERLAY -> "PAD"
     else -> "VK$vk"
   }
 }

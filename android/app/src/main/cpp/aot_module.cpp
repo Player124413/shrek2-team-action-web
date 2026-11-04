@@ -37,6 +37,13 @@
 #include "core/rt.h"
 #include "platform/platform.h"
 
+extern "C" {
+// Declared here rather than in rt.h: `rt_trap_id` is supplied by game_main.cpp and `rt_dispatch_ext`
+// by core.cpp, and the web player build declares them at its use site the same way.
+void rt_dispatch_ext(Cpu* c, uint32_t target);
+void rt_trap_id(Cpu* c, uint32_t id) __attribute__((noreturn));
+}
+
 namespace rt {
 namespace {
 
