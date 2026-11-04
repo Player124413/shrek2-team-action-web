@@ -36,6 +36,18 @@ case "$JOB" in
     step "Native syntax check" tools/android-check.sh
     step "Release rules" tools/release-test.sh
     step "Workflow schema" node tools/check-workflows.mjs
+    # A lenient parser can accept a file GitHub rejects ("workflow file issue", no jobs at all), so the
+    # YAML is also parsed by an implementation that is not ours.
+    if python3 -c "import yaml" 2>/dev/null; then
+      step "Workflow YAML (PyYAML)" python3 -c "
+import sys, yaml
+for f in sys.argv[1:]:
+    yaml.safe_load(open(f))
+print('parsed by PyYAML')
+" .github/workflows/*.yml
+    else
+      echo; echo "SKIP  Workflow YAML (PyYAML) (pip install pyyaml)"
+    fi
     step "Version numbers" bash -c '
       set -e
       out="$(tools/android-version.sh)"; echo "version: $out"

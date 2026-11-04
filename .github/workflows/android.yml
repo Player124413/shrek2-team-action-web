@@ -43,7 +43,8 @@ jobs:
       - name: Toolchain
         # Printed once so a failure can be tied to a version; nothing here depends on secrets, so a fork
         # and a pull request from a fork run exactly the same checks.
-        run: echo "runner: $(uname -sm), python $(python3 -V | cut -d' ' -f2), node $(node -v)"
+        run: |
+          echo "runner: $(uname -sm), python $(python3 -V | cut -d' ' -f2), node $(node -v)"
 
       - uses: actions/setup-node@v4
         with:

@@ -154,6 +154,30 @@ function parseYaml(text, file) {
 }
 
 const problems = [];
+
+// A plain scalar cannot contain ": " -- YAML reads it as a nested key. It is the mistake that breaks a
+// workflow file outright (GitHub reports "workflow file issue" with no job at all), and a lenient parser
+// happily accepts it, so check for it directly on every line outside a block scalar.
+function checkPlainScalars(text, name) {
+  let blockIndent = -1;
+  text.split("\n").forEach((line, i) => {
+    const indent = line.length - line.trimStart().length;
+    if (line.trim() === "" || line.trimStart().startsWith("#")) return;
+    if (blockIndent >= 0 && indent > blockIndent) return;
+    blockIndent = -1;
+    if (/(^|:\s)[|>][-+]?\s*(#.*)?$/.test(line)) {
+      blockIndent = indent;
+      return;
+    }
+    // A key line is fine; a *value* line that contains ": " is not. Comments are stripped first, so
+    // `key: 0   # note: this is fine` does not trip it.
+    const noComment = line.replace(/\s+#.*$/, "");
+    const value = noComment.replace(/^\s*(- )?[^:#]+:\s?/, "");
+    if (/^\S/.test(value) && /: /.test(value)) {
+      problems.push(`${name}:${i + 1}: unquoted value contains ": " (a YAML parser reads a nested key here): ${line.trim().slice(0, 80)}`);
+    }
+  });
+}
 const files = process.argv.length > 2 ? process.argv.slice(2) : readdirSync(dir).filter((f) => /\.ya?ml$/.test(f)).map((f) => join(dir, f));
 
 let actionCount = 0;
@@ -162,6 +186,7 @@ let scriptCount = 0;
 for (const path of files) {
   const name = relative(root, path);
   const text = readFileSync(path, "utf8");
+  checkPlainScalars(text, name);
   let doc;
   try {
     doc = parseYaml(text, name);
