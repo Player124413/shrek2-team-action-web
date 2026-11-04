@@ -113,6 +113,37 @@ Two things only a real NDK and a real linker caught:
   and `tools/build-ffmpeg-android.sh` links a probe `.so` after installing so a non-PIC build fails
   there instead of ten minutes later in Gradle.
 
+## The game inside the APK
+
+The simplest path for a player: the game is built into the APK, and installing the app is all they do.
+Nothing is copied by hand and no disc has to be picked.
+
+```sh
+# from an installed copy (a folder holding Game/), or straight from a disc image
+node tools/pack-game.mjs --from-dir "/path/to/installed"  --out android/app/src/main/assets
+node tools/pack-game.mjs --from-iso "/path/to/disc.iso"   --out android/app/src/main/assets
+tools/build-apk.sh --debug --iso "/path/to/disc.iso"     # or --game <folder>
+```
+
+That writes `assets/game/`: the files, an `index.txt` (`size<TAB>path`), a `manifest.json` with every MD5,
+and a `stamp.txt` (`<folder md5> <files> <bytes>`). The tree is stored uncompressed in the APK (`noCompress`
+in `app/build.gradle.kts`), because most of it is already-compressed game data and a stored entry is a plain
+read. On the first start `BundledGame` unpacks it into `noBackupFilesDir/install/` -- the same place a disc
+install writes -- with progress on screen, and records the stamp so later launches do nothing. The game
+files therefore survive APK updates, like the settings do, and a new APK that carries a different tree
+unpacks again (the stamp differs).
+
+CI takes the tree from one of two secrets, neither required:
+
+| secret | what it is |
+| --- | --- |
+| `SHREK2_GAME_TARBALL_BASE64` | base64 of a `.tar.gz` of an installed copy (the folder holding `Game/`) |
+| `SHREK2_ISO_BASE64` | base64 of the disc image; the reference installer unpacks it in the build |
+
+The game is **never** committed: `android/app/src/main/assets/game/` is git-ignored, and the APK that ships
+it is built by whoever owns the game. Without either secret the APK simply has no game and the launcher
+falls back to the disc-image install below.
+
 ## Installing from a disc image
 
 "Install from your own disc" takes the **ISO image** of the retail disc -- not an installed folder, not

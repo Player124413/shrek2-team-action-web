@@ -2,6 +2,7 @@
 # Builds the APK and checks the things that decide whether it can *replace* an installed copy.
 #
 #   tools/build-apk.sh [--debug] [--no-image] [--exe <Shrek 2.exe>] [--meta metadata/<sha>.json]
+#                      [--game <installed folder>] [--iso <disc.iso>]
 #
 # What it guarantees, and why each step exists:
 #   * versionCode strictly increases (tools/android-version.sh) -- otherwise Android refuses the update;
@@ -20,18 +21,34 @@ VARIANT=release
 BUILD_IMAGE=1
 EXE=""
 META=""
+GAME=""
+ISO=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --debug) VARIANT=debug; shift ;;
     --no-image) BUILD_IMAGE=0; shift ;;
     --exe) EXE="$2"; shift 2 ;;
     --meta) META="$2"; shift 2 ;;
+    --game) GAME="$2"; shift 2 ;;
+    --iso) ISO="$2"; shift 2 ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
 mkdir -p "$ASSETS"
+
+# ---- 0. The game itself ----------------------------------------------------------------------------
+# Packaged into the APK so the player installs the app and plays, with no disc to pick. Either an
+# already-installed folder (`--game`) or a disc image the reference installer unpacks (`--iso`).
+if [ -n "$GAME" ] || [ -n "$ISO" ]; then
+  echo "== game =="
+  if [ -n "$ISO" ]; then
+    node "$ROOT/tools/pack-game.mjs" --from-iso "$ISO" --out "$ASSETS"
+  else
+    node "$ROOT/tools/pack-game.mjs" --from-dir "$GAME" --out "$ASSETS"
+  fi
+fi
 
 # ---- 1. AOT image ---------------------------------------------------------------------------------
 if [ -n "$EXE" ]; then

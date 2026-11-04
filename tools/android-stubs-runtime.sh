@@ -359,6 +359,26 @@ open class GameActivity : android.app.Activity()
 === androidx.appcompat.app
 @Suppress("unused")
 open class AppCompatActivity : android.app.Activity()
+=== harness
+/**
+ * An `AssetManager` over a directory: the APK's `assets/` for the purposes of this harness. The bundled
+ * game is written there by `tools/pack-game.mjs`, so unpacking it is the real code path over real bytes.
+ */
+class DirAssets : android.content.res.AssetManager() {
+  var root: java.io.File? = null
+  private fun file(path: String): java.io.File {
+    val base = root ?: throw java.io.FileNotFoundException(path)
+    val f = java.io.File(base, path)
+    if (!f.isFile) throw java.io.FileNotFoundException(path)
+    return f
+  }
+  override fun open(name: String): java.io.InputStream = file(name).inputStream()
+  override fun list(path: String): Array<String> {
+    val base = root ?: return emptyArray()
+    val dir = if (path.isEmpty()) base else java.io.File(base, path)
+    return dir.list()?.sorted()?.toTypedArray() ?: emptyArray()
+  }
+}
 === org.shrek2.launcher
 /**
  * Stand-in for the real `InstallFiles`, which is a JNI facade (`System.loadLibrary("shrek2")`) and cannot
@@ -403,8 +423,20 @@ object Strings {
 
 object StubPackageManager : android.content.pm.PackageManager()
 object StubAssets : android.content.res.AssetManager() {
-  override fun open(name: String): java.io.InputStream = throw java.io.FileNotFoundException(name)
-  override fun list(path: String): Array<String> = emptyArray()
+  /** Set by the harness: serve `assets/` from this directory. */
+  var root: java.io.File? = null
+  private fun file(path: String): java.io.File {
+    val base = root ?: throw java.io.FileNotFoundException(path)
+    val f = java.io.File(base, path)
+    if (!f.isFile) throw java.io.FileNotFoundException(path)
+    return f
+  }
+  override fun open(name: String): java.io.InputStream = file(name).inputStream()
+  override fun list(path: String): Array<String> {
+    val base = root ?: return emptyArray()
+    val dir = if (path.isEmpty()) base else java.io.File(base, path)
+    return dir.list()?.sorted()?.toTypedArray() ?: emptyArray()
+  }
 }
 object StubResolver : android.content.ContentResolver() {
   /** The provider's answer to a SIZE query: the length of the document it is serving. */
@@ -454,6 +486,7 @@ import android.widget.CheckBox
 import android.widget.SeekBar
 import org.shrek2.launcher.LauncherActivity
 import org.shrek2.launcher.Settings
+import harness.StubAssets
 import harness.Strings
 import harness.StubResolver
 import java.io.File
@@ -472,7 +505,9 @@ private fun step(what: String, block: () -> Unit) {
 }
 
 fun main(args: Array<String>) {
-  val root = File(args.firstOrNull() ?: "/tmp/shrek2-launcher-check")
+  // The scratch root (the app's private storage) comes from a property; args[0] is a disc image and
+  // args[1] a packed assets directory, either of which may be empty.
+  val root = File(System.getProperty("shrek2.root") ?: "/tmp/shrek2-launcher-check")
   root.deleteRecursively()
   root.mkdirs()
 
@@ -546,7 +581,7 @@ fun main(args: Array<String>) {
   //    picked, the installer reads it *from the document* (no copy into the cache) and writes the game
   //    files. The image comes from the corpus the installer test generates, so this covers the wiring:
   //    document -> installer -> install directory.
-  val iso = File(args.getOrNull(1) ?: "/tmp/shrek2-launcher-disc.iso")
+  val iso = File(args.getOrNull(0)?.takeIf { it.isNotEmpty() } ?: "/tmp/shrek2-launcher-disc.iso")
   if (!iso.isFile) {
     println("SKIP  the install path (no disc image at ${iso.path}; tools/installer-test.sh provides one)")
   } else {
@@ -584,6 +619,34 @@ fun main(args: Array<String>) {
   }
   }
 
+  // 5. The game built into the APK: nothing is installed, the APK carries one, the launcher unpacks it on
+  //    its own and "Play" becomes available -- the flow a player gets when they install the APK.
+  val assets = args.getOrNull(1)?.takeIf { it.isNotEmpty() }?.let { File(it) }
+  if (assets == null || !assets.isDirectory) {
+    println("SKIP  the bundled game (no packed assets directory given)")
+  } else {
+    val fresh = File(root, "bundled").apply { deleteRecursively(); mkdirs() }
+    step("the game inside the APK is unpacked on the first start") {
+      val ctx = LauncherActivity()
+      ctx.rootDir = fresh
+      StubAssets.root = assets
+      ctx.onCreate(null)
+      ctx.onResume()                    // this is what triggers the unpack
+      // It runs on a worker thread: wait for it the way the player waits -- by looking at the screen.
+      var waited = 0
+      while (!org.shrek2.launcher.InstallFiles.installed(ctx) && waited < 20_000) {
+        Thread.sleep(50)
+        waited += 50
+      }
+      check(org.shrek2.launcher.InstallFiles.installed(ctx)) { "the packaged game was not unpacked" }
+      val exe = File(fresh, "install/Game/Shrek 2.exe")
+      check(exe.isFile) { "no ${exe.path}" }
+      check(exe.length() > 0) { "the executable is empty" }
+      ctx.onResume()                    // a second start must not unpack again
+      check(File(fresh, "install/.bundled").isFile) { "no unpack stamp" }
+    }
+  }
+
   println(if (failures == 0) "ok: the launcher starts and works (no crash paths found)" else "FAILED ($failures problems)")
   if (failures != 0) kotlin.system.exitProcess(1)
 }
@@ -593,6 +656,7 @@ SOURCES=$(find android/app/src/main/java/org/shrek2/launcher/install -name '*.kt
 SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/LauncherActivity.kt"
 SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/Settings.kt"
 SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/ContentSource.kt"
+SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/BundledGame.kt"
 SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/Registry.kt"
 # `InstallFiles.kt` is left out on purpose: it is a JNI facade (`System.loadLibrary`), replaced by the
 # stand-in above. Everything else on the start-up path is the real code.
@@ -606,4 +670,8 @@ echo "== compiling the launcher with the runtime stand-in =="
 echo "== running the launcher's start-up and its controls =="
 STDLIB="$(dirname "$(readlink -f "$KOTLINC")")/../lib/kotlin-stdlib.jar"
 [ -f "$STDLIB" ] || STDLIB=""
-java -cp "$OUT/launcher.jar${STDLIB:+:$STDLIB}" HarnessKt
+# The harness takes a disc image and a packed assets directory; the scratch root is a property so the
+# argument order stays readable. (`"$@"` is the script's own arguments -- `--keep` included -- so it is not
+# forwarded; the harness reads only what is passed here.)
+java -Dshrek2.root="${SHREK2_HARNESS_ROOT:-/tmp/shrek2-launcher-check}" \
+  -cp "$OUT/launcher.jar${STDLIB:+:$STDLIB}" HarnessKt "${SHREK2_HARNESS_ISO:-}" "${SHREK2_HARNESS_ASSETS:-}"

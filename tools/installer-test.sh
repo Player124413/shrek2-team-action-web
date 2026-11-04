@@ -50,10 +50,20 @@ STDLIB="$(dirname "$(readlink -f "$KOTLINC")")/../lib/kotlin-stdlib.jar"
 [ -f "$STDLIB" ] || STDLIB=""
 java -cp "$OUT/installer.jar${STDLIB:+:$STDLIB}" org.shrek2.launcher.install.InstallerCheck "$OUT"
 
+echo "== packer: the installed game can be built into the APK =="
+# The other delivery path: an installed copy is packaged into `assets/game/` and the launcher unpacks it.
+# Both are checked here, with the corpus standing in for the game.
+node "$ROOT/tools/pack-game.mjs" --from-dir "$OUT/install" --out "$OUT/assets"
+[ -f "$OUT/assets/game/stamp.txt" ] || { echo "the packer wrote no stamp" >&2; exit 1; }
+echo "ok: packaged $(grep -c . "$OUT/assets/game/index.txt") files, stamp $(cat "$OUT/assets/game/stamp.txt")"
+
 echo "== launcher: installing the corpus from a content:// document =="
 # The same image, but through the screen a player uses: the launcher must read it out of the document it
 # was given (not copy it first -- a silent short copy of a 548 MB disc is what broke a real install) and
 # write the game files. This also fails if the launcher ever stops asking for the image itself.
-KOTLINC="$KOTLINC" "$ROOT/tools/android-stubs-runtime.sh" "$OUT/shrek2.iso"
+# The launcher harness also unpacks the packaged game, which is the flow a player gets: install the APK,
+# open it, play.
+SHREK2_HARNESS_ISO="$OUT/shrek2.iso" SHREK2_HARNESS_ASSETS="$OUT/assets" \
+  KOTLINC="$KOTLINC" "$ROOT/tools/android-stubs-runtime.sh"
 
 echo "ok: the disc installer works in both implementations"

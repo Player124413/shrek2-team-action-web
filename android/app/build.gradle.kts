@@ -141,7 +141,12 @@ android {
   // are not modified afterwards, so keep them uncompressed in the APK: the loader mmaps the image
   // directly out of the asset instead of copying it through a buffer.
   androidResources {
+    // `sk2a`/`skx`: the AOT image is mmapped out of the asset, so it must not be deflated.
+    // `game`: the installed copy of the game packaged by tools/pack-game.mjs. Most of it is already
+    // compressed (textures, audio, video), so deflating it would cost build time and save nothing, and a
+    // stored entry is a plain read for AssetManager when the launcher unpacks it on first start.
     noCompress += listOf("sk2a", "skx")
+    noCompress += listOf("game")
   }
 
   packaging {

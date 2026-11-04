@@ -24,11 +24,12 @@ import java.io.File
 /**
  * Start-up screen: installs the game from the player's own disc image and starts it.
  *
- * "Install from your own disc" asks for the *ISO image* of the retail disc and installs the game files
- * straight out of it (ISO 9660 -> MSI database -> LZX cabinet, see `install/`). No desktop step and no
- * pre-installed folder: the player picks the image, the launcher writes `Game/...` into app-private
- * storage. The image is streamed into the cache directory first, because a `content://` document has no
- * positional reads and the installer needs random access; the copy is deleted as soon as it is done.
+ * Two ways to get the game there, and the second is the default when it is available:
+ *
+ *  1. the APK may carry an installed copy (`BundledGame`), which is unpacked on the first start -- the
+ *     player installs the app and plays;
+ *  2. "Install from your own disc" asks for the *ISO image* of the retail disc and installs out of it
+ *     straight from the document (ISO 9660 -> MSI -> LZX cabinet, see `install/`), nothing copied first.
  *
  * Graphics settings live here too: the original Launcher's resolution and effects switches, written to
  * the registry file the game reads at start-up. Everything is local — no network code anywhere.
@@ -154,15 +155,61 @@ class LauncherActivity : AppCompatActivity() {
   override fun onResume() {
     super.onResume()
     refresh()
+    // The APK may carry an installed copy of the game (tools/pack-game.mjs). Unpacking it is a one-time
+    // copy of a few hundred megabytes on the first start, so it runs off the UI thread and the screen says
+    // what is happening instead of looking empty.
+    if (!installing && !InstallFiles.installed(this) && BundledGame.bundled(this)) unpackBundled()
+  }
+
+  /** Copy the game packaged in the APK into the install directory, showing progress. */
+  private fun unpackBundled() {
+    installing = true
+    install.isEnabled = false
+    play.isEnabled = false
+    progress.visibility = View.VISIBLE
+    progress.progress = 0
+    progressText.visibility = View.VISIBLE
+    progressText.text = getString(R.string.install_unpacking)
+    Thread {
+      var failure: String? = null
+      try {
+        BundledGame.unpack(this) { done, total ->
+          val percent = if (total > 0) done * 100 / total else 0
+          main {
+            progress.progress = percent
+            progressText.text = getString(R.string.install_writing, done, total)
+          }
+        }
+      } catch (e: Exception) {
+        failure = e.message ?: e.toString()
+      }
+      main {
+        installing = false
+        install.isEnabled = true
+        progress.visibility = View.GONE
+        progressText.visibility = if (failure == null) View.GONE else View.VISIBLE
+        if (failure != null) progressText.text = getString(R.string.install_failed, failure)
+        if (InstallFiles.installed(this)) {
+          // The registry the game reads has to exist before the first start; the bundled tree does not
+          // carry one (settings are the player's, not the disc's).
+          loadGraphics()
+        }
+        refresh()
+      }
+    }.start()
   }
 
   private fun refresh() {
     if (installing) return
     val installed = InstallFiles.installed(this)
     val compiled = InstallFiles.compiled(this)
+    val bundled = BundledGame.bundled(this)
     play.isEnabled = installed && compiled
-    install.visibility = if (installed) View.GONE else View.VISIBLE
+    // With the game inside the APK there is nothing to install: the disc path stays available, but as a
+    // secondary option, because a player who owns a disc should still be able to use it.
+    install.visibility = if (installed && bundled) View.GONE else View.VISIBLE
     status.text = when {
+      !installed && bundled -> getString(R.string.status_unpacking)
       !installed -> getString(R.string.status_not_installed)
       !compiled -> getString(R.string.status_needs_compile)
       else -> getString(R.string.status_ready, InstallFiles.imageBytes(this) / 1048576)

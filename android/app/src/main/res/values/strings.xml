@@ -16,6 +16,8 @@
   <string name="settings_distance">View distance</string>
   <string name="settings_hint">The game reads these when it starts, so change them while it is not running. Keyboard and gamepad bindings are on the desktop page.</string>
   <string name="install_scanning">Reading the disc…</string>
+  <string name="install_unpacking">Unpacking the game that is inside the app…</string>
+  <string name="status_unpacking">The game is built into this app and is being unpacked for this device. This happens once.</string>
   <string name="install_writing">Installing: %1$d of %2$d files</string>
   <string name="install_done">Installed.</string>
   <string name="install_warnings">Installed, with warnings: %1$s</string>
