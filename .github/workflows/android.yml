@@ -205,9 +205,18 @@ jobs:
           key: ffmpeg-android-${{ env.FFMPEG_VERSION }}-${{ env.NDK_VERSION }}
 
       - name: FFmpeg for arm64 (Bink decoders)
+        id: ffmpeg
         # Bink video needs it; the CMake configure refuses to build without it, so a failure here must
-        # not silently produce an APK with broken cutscenes -- fail the job instead.
-        run: .github/scripts/fetch-ffmpeg-android.sh
+        # not silently produce an APK with broken cutscenes -- fail the job with the whole log instead.
+        run: |
+          set -o pipefail
+          if ! .github/scripts/fetch-ffmpeg-android.sh 2>&1 | tee ffmpeg.log; then
+            echo "::error title=FFmpeg build failed::the Bink decoders could not be built"
+            # The runner cannot stream a failing step's log over the API while it runs, so the tail is
+            # repeated as annotations: that is what shows up in the web UI and in `gh run view`.
+            tail -n 30 ffmpeg.log | sed 's/^/::error::/'
+            exit 1
+          fi
 
       - name: Release keystore
         id: keystore
