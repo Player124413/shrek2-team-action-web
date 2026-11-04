@@ -300,6 +300,7 @@ jobs:
             echo "| --- | --- |"
             echo "| version | ${{ steps.version.outputs.name }} (${{ steps.version.outputs.code }}) |"
             echo "| signed | ${{ steps.keystore.outputs.signed }} |"
+            echo "| triggering ref | \`${{ github.ref }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
           ls -l android/app/build/outputs/apk/release/ || true
           # AGP writes app-release-unsigned.apk when there is no signing config.
