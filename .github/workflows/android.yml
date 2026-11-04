@@ -319,10 +319,13 @@ jobs:
           fi
           # The image is optional in a fork without the reference executable, so only warn.
           unzip -l "$APK" | grep -E "assets/game\.sk2a" || echo "::warning::the APK carries no AOT image"
+          sha="$(sha256sum "$APK" | cut -d" " -f1)"
+          echo "APK_RESULT name=$(basename "$APK") size=$(stat -c%s "$APK") sha256=$sha"
           {
-            echo "| file | $(basename "$APK") ($(du -h "$APK" | cut -f1)) |"
-            echo "| sha256 | $(sha256sum "$APK" | cut -d" " -f1) |"
+            echo "| sha256 | $sha |"
             echo "| native | arm64-v8a/libshrek2.so |"
+            echo "| image | $(unzip -l "$APK" | grep -cE "assets/game\.sk2a") packaged |"
+            echo "| contents | $(unzip -l "$APK" | tail -1) |"
           } >> "$GITHUB_STEP_SUMMARY"
           # Remove the keystore before anything is archived.
           rm -f android/keystore.properties
