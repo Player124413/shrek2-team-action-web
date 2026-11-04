@@ -41,6 +41,7 @@ class LauncherActivity : AppCompatActivity() {
   private lateinit var settingsBox: LinearLayout
   private lateinit var progress: ProgressBar
   private lateinit var progressText: TextView
+  private lateinit var distanceBar: SeekBar
 
   private var resolution = 2
   private val switches = HashMap<Int, CheckBox>() // option bit -> checkbox
@@ -68,50 +69,53 @@ class LauncherActivity : AppCompatActivity() {
       setOnClickListener { startActivity(Intent(this@LauncherActivity, GameActivity::class.java)) }
     }
 
-    settingsBox = LinearLayout(this).apply {
-      orientation = LinearLayout.VERTICAL
-      addView(TextView(this@LauncherActivity).apply {
-        text = getString(R.string.settings_graphics)
-        textSize = 20f
-        setPadding(0, 24, 0, 8)
-      })
-      addView(TextView(this@LauncherActivity).apply {
-        text = getString(R.string.settings_resolution)
-        textSize = 14f
-      })
-      addView(Button(this@LauncherActivity).apply {
-        id = RESOLUTION_BUTTON_ID
+    // The settings block is created first and filled afterwards: `addOption` appends to it, and a
+    // `lateinit` that is only assigned when the whole `apply` block has run is not initialised yet
+    // inside it (that ordering crashed the activity before the screen appeared).
+    settingsBox = LinearLayout(this)
+    settingsBox.orientation = LinearLayout.VERTICAL
+    settingsBox.addView(TextView(this).apply {
+      text = getString(R.string.settings_graphics)
+      textSize = 20f
+      setPadding(0, 24, 0, 8)
+    })
+    settingsBox.addView(TextView(this).apply {
+      text = getString(R.string.settings_resolution)
+      textSize = 14f
+    })
+    settingsBox.addView(Button(this).apply {
+      id = RESOLUTION_BUTTON_ID
+      text = Settings.RESOLUTIONS[resolution]
+      setOnClickListener {
+        resolution = (resolution + 1) % Settings.RESOLUTIONS.size
         text = Settings.RESOLUTIONS[resolution]
-        setOnClickListener {
-          resolution = (resolution + 1) % Settings.RESOLUTIONS.size
-          text = Settings.RESOLUTIONS[resolution]
-          saveGraphics()
-        }
-      })
-      addOption(g, Settings.OPT_SHADOWS, R.string.settings_shadows)
-      addOption(g, Settings.OPT_ANTIALIAS, R.string.settings_antialiasing)
-      addOption(g, Settings.OPT_CLIPPING, R.string.settings_clipping)
-      addView(TextView(this@LauncherActivity).apply {
-        text = getString(R.string.settings_distance)
-        textSize = 14f
-        setPadding(0, 16, 0, 0)
-      })
-      addView(SeekBar(this@LauncherActivity).apply {
-        id = DISTANCE_ID
-        max = 100
-        progress = g.distance
-        setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-          override fun onProgressChanged(bar: SeekBar, value: Int, fromUser: Boolean) {}
-          override fun onStartTrackingTouch(bar: SeekBar) {}
-          override fun onStopTrackingTouch(bar: SeekBar) = saveGraphics()
-        })
-      })
-      addView(TextView(this@LauncherActivity).apply {
-        text = getString(R.string.settings_hint)
-        textSize = 12f
-        setPadding(0, 24, 0, 0)
+        saveGraphics()
+      }
+    })
+    addOption(g, Settings.OPT_SHADOWS, R.string.settings_shadows)
+    addOption(g, Settings.OPT_ANTIALIAS, R.string.settings_antialiasing)
+    addOption(g, Settings.OPT_CLIPPING, R.string.settings_clipping)
+    settingsBox.addView(TextView(this).apply {
+      text = getString(R.string.settings_distance)
+      textSize = 14f
+      setPadding(0, 16, 0, 0)
+    })
+    distanceBar = SeekBar(this).apply {
+      id = DISTANCE_ID
+      max = 100
+      progress = g.distance
+      setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+        override fun onProgressChanged(bar: SeekBar, value: Int, fromUser: Boolean) {}
+        override fun onStartTrackingTouch(bar: SeekBar) {}
+        override fun onStopTrackingTouch(bar: SeekBar) = saveGraphics()
       })
     }
+    settingsBox.addView(distanceBar)
+    settingsBox.addView(TextView(this).apply {
+      text = getString(R.string.settings_hint)
+      textSize = 12f
+      setPadding(0, 24, 0, 0)
+    })
 
     val column = LinearLayout(this).apply {
       orientation = LinearLayout.VERTICAL
@@ -184,7 +188,7 @@ class LauncherActivity : AppCompatActivity() {
       shadows = options and Settings.OPT_SHADOWS != 0,
       antiAliasing = options and Settings.OPT_ANTIALIAS != 0,
       clipping = options and Settings.OPT_CLIPPING != 0,
-      distance = findViewById<SeekBar>(DISTANCE_ID).progress,
+      distance = if (::distanceBar.isInitialized) distanceBar.progress else Settings.defaults().distance,
     )
     Settings.write(registry, g)
     Registry.save(registryFile(), registry)

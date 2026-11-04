@@ -96,13 +96,19 @@ jobs:
         # but it needs the SDK and the NDK (minutes), and a renamed symbol should fail in seconds.
         run: tools/android-stubs.sh
 
+      - name: Launcher (start-up on a plain JVM)
+        # Type-checking is not enough: the activity once crashed before its first frame because a
+        # `lateinit` view was used inside the `apply` block that was supposed to create it, which
+        # compiles perfectly. This runs the real `onCreate`/`onResume` and pokes every control.
+        run: tools/android-stubs-runtime.sh
+
       - name: Lint the build scripts
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
           shellcheck -S warning tools/build-apk.sh tools/build-android.sh tools/android-version.sh \
             tools/android-check.sh tools/android-release-notes.sh tools/release-test.sh \
             tools/android-keygen.sh tools/etc2-test.sh tools/build-ffmpeg-android.sh \
-            tools/installer-test.sh tools/android-stubs.sh \
+            tools/installer-test.sh tools/android-stubs.sh tools/android-stubs-runtime.sh \
             .github/scripts/fetch-ffmpeg-android.sh
 
       - name: Version numbers

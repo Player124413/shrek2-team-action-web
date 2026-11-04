@@ -62,6 +62,7 @@ tools/android-check.sh     # native platform layer compiles (-Werror) without an
 tools/release-test.sh      # version codes, key generation, "will this APK replace the installed one?"
 tools/installer-test.sh    # the disc installer: a synthetic disc, installed by both implementations
 tools/android-stubs.sh     # the launcher type-checks against generated Android API stubs
+tools/android-stubs-runtime.sh  # ...and runs its start-up on a JVM (catches crashes a type check cannot)
 node tools/check-workflows.mjs   # the workflow itself: jobs, needs, step outputs, bash -n
 ```
 
