@@ -314,10 +314,16 @@ jobs:
           "$BT/aapt2" dump badging "$APK" | grep -E "^package:|^native-code:"
           # The APK must verify: an unsigned or badly signed one shows up on the phone as
           # "app not installed".
-          if ! "$BT/apksigner" verify --verbose --print-certs "$APK" | tee sign.txt; then
-            echo "::error::the APK does not verify"; exit 1
+          # `set -o pipefail` is already on: a failing apksigner is not hidden by the tee.
+          if ! "$BT/apksigner" verify --verbose --print-certs "$APK" > sign.txt 2>&1; then
+            echo "::error title=the APK does not verify::$(tail -n 3 sign.txt | tr '\n' ' ')"
+            sed 's/^/::error::/' sign.txt | tail -n 10
+            exit 1
           fi
-          grep -q "Signer #1 certificate SHA-256 digest" sign.txt || { echo "::error::the APK is unsigned"; exit 1; }
+          cat sign.txt
+          if ! grep -q "Signer #1 certificate SHA-256 digest" sign.txt; then
+            echo "::error title=the APK is unsigned::no signer certificate in the APK"; exit 1
+          fi
           # The native library is what makes the APK an app at all.
           if ! unzip -l "$APK" | grep -qE "lib/arm64-v8a/libshrek2\.so"; then
             echo "::error::the APK has no arm64 native library"; unzip -l "$APK" | head -20 | sed 's/^/::error::'; exit 1
