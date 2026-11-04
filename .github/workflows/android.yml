@@ -284,7 +284,11 @@ jobs:
           [ -x ./gradlew ] || gradle wrapper --gradle-version 8.9 --no-daemon
           # The runner does not expose a step's log while it runs; repeat the tail as annotations so a
           # failure is diagnosable from the API.
-          if ! ./gradlew --no-daemon --stacktrace assembleRelease 2>&1 | tee ../assemble.log; then
+          # Report the signing configuration first: a build that is not signed is not installable, so the
+          # log has to say which key Gradle picked before the expensive part starts.
+          ./gradlew --no-daemon -q signingReport 2>&1 | tee ../signing.log || true
+          grep -A3 "Variant: release" ../signing.log | head -8 || true
+          if ! ./gradlew --no-daemon --stacktrace assembleRelease 2>&1 | tee -a ../assemble.log; then
             grep -E "error:|e: |FAILURE|What went wrong|Caused by|^\* " -A2 ../assemble.log | tail -n 40 | sed 's/^/::error::/' || true
             tail -n 20 ../assemble.log | sed 's/^/::error::/'
             exit 1
@@ -314,6 +318,9 @@ jobs:
           fi
           [ -f "$APK" ] || { echo "::error::no APK was produced"; exit 1; }
           BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          echo "APK: $APK ($(stat -c%s "$APK") bytes)"
+          unzip -l "$APK" | grep -E "META-INF/" || echo "(no META-INF entries: unsigned v1, expected for v2-only signing)"
+          unzip -l "$APK" | head -6
           "$BT/aapt2" dump badging "$APK" | grep -E "^package:|^native-code:"
           # The APK must verify: an unsigned or badly signed one shows up on the phone as
           # "app not installed".
@@ -325,7 +332,10 @@ jobs:
           fi
           cat sign.txt
           if ! grep -q "Signer #1 certificate SHA-256 digest" sign.txt; then
-            echo "::error title=the APK is unsigned::no signer certificate in the APK"; exit 1
+            echo "::error title=no signer certificate in the APK::$(head -c 200 sign.txt | tr '\n' ' ')"
+            echo "=== assemble.log tail"
+            tail -n 25 assemble.log 2>/dev/null || echo "(no assemble.log)"
+            exit 1
           fi
           cert="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' sign.txt | head -1)"
           echo "SIGNATURE ok: $(grep -c "^Verified using v[23] scheme" sign.txt) scheme(s), cert ${cert:0:16}..."
