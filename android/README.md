@@ -58,6 +58,7 @@ complete — see `recomp/src/translate.ts`).
 | `aot_module.cpp` | the image loader: `mmap`, relocations, `rt::game_owns`/`game_call` behind `RT_PLAYER`, trap messages |
 | `game_main.cpp` | the game thread: `memory_init`/`vfs_init`/`registry_init`/`load_image`/`aot_load`/`dispatch_init` |
 | `install_files.cpp` | copies the player's files into `files/install/`, the layout `vfs_init` expects |
+| `runtime/src/gles/blocks.h` | shared with the desktop and web builds: DXT decode + ETC2/EAC transcode (`tools/etc2-test.sh` verifies it) |
 | `java/.../GameActivity.kt` | surface, lifecycle, keyboard/controller → JNI, back gesture → Escape |
 | `java/.../TouchOverlayView.kt` | the virtual pad and its bindings |
 | `java/.../LauncherActivity.kt` | install wizard and "Play" |
@@ -100,6 +101,23 @@ Not done yet, in rough order of expected payoff: register allocation across the 
 non-guest locals (many spills are still stack slots), common-subexpression elimination for repeated
 `0x401000 + x` address formation, and a per-function LRU code cache so that hot functions stay mapped
 when an image outgrows what a device will keep resident.
+
+### Textures: ETC2
+
+Shrek 2's art is DXT (S3TC). S3TC is a desktop GL extension: most mobile GPUs do not expose it and
+WebGL implementations usually gate it, so a port that assumed it would either show untextured surfaces
+or expand every texture to RGBA8 and keep 4x the memory resident. ETC2/EAC is *core* in GLES 3.0 and in
+WebGL 2, so `runtime/src/gles/blocks.h` decodes each DXT block with the reference decoder and
+re-encodes it as ETC2 at upload time (RGB8 for DXT1, RGBA8 EAC for the alpha formats) — one pass per
+texture level, same GPU memory as DXT, no per-frame cost.
+
+That is lossy, which is why it is only used where the *game* never reads the pixels back: rasterized
+triangles sample textures through the guest's own 32-bit addresses, so the GL copy exists only for the
+GPU. Surfaces the game locks or copies take the RGBA8 path, which stays bit-exact.
+
+Verified by `tools/etc2-test.sh`: it decodes DXT, transcodes, and decodes the ETC2 back with an
+independent decoder written from the Khronos spec (40 dB PSNR on gradients, 25 dB on hard-edged
+checkerboards, 28 dB on alpha), and includes a bit-layout probe that fails if any field moves.
 
 ## Deliberate limitations
 

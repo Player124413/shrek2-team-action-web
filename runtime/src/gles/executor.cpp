@@ -23,6 +23,7 @@
 #include "../d3d9/d3d9.h"
 #include "../platform/platform.h"
 #include "renderer.h"
+#include "blocks.h"
 
 namespace gles {
 
@@ -45,10 +46,13 @@ static bool has_s3tc() {
         if (e && (strstr(e, "texture_compression_s3tc") || strstr(e, "compressed_texture_s3tc"))) cached = 1;
       }
     }
-    rt::log(rt::Log::Info, "GL: S3TC %s", cached ? "supported" : "not supported (CPU decompression)");
+    rt::log(rt::Log::Info, "GL: S3TC %s", cached ? "supported (DXT art stays S3TC)" : "not supported (DXT art is transcoded to ETC2)");
   }
   return cached == 1;
 }
+
+static bool is_dxt(uint32_t fmt);
+static bool has_etc2();
 
 GlFormat gl_format(uint32_t fmt) {
   switch (fmt) {
@@ -62,35 +66,39 @@ GlFormat gl_format(uint32_t fmt) {
     case FMT_DXT4: case FMT_DXT5: if (has_s3tc()) return {GL_COMPRESSED_RGBA_S3TC_DXT5_EXT, 0, 0, true, false}; break;
     default: break;
   }
-  // Everything else (and DXT without S3TC) is expanded to RGBA8 on the CPU.
+  // S3TC is a desktop extension: every mobile GPU (and every WebGL implementation without the
+  // extension) reports it missing, and decoding on the CPU would keep 8 bytes per pixel resident for
+  // the whole session. Desktop-compressed art is transcoded to ETC2 instead (4 or 8 bytes per pixel,
+  // core in GLES 3.0 and in WebGL 2).
+  if (is_dxt(fmt) && has_etc2()) {
+    const bool alpha = fmt == FMT_DXT2 || fmt == FMT_DXT3 || fmt == FMT_DXT4 || fmt == FMT_DXT5;
+    return {alpha ? (GLenum)GL_COMPRESSED_RGBA8_ETC2_EAC : (GLenum)GL_COMPRESSED_RGB8_ETC2, 0, 0, true, false};
+  }
+  // Everything else (and DXT when neither S3TC nor ETC2 is available) is expanded to RGBA8 on the CPU.
   return {GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, false, true};
 }
 
-// Decode one DXT colour block (8 bytes) into 16 RGBA pixels.
-static void dxt_color(const uint8_t* b, uint8_t* out, bool dxt1) {
-  uint16_t c0 = (uint16_t)(b[0] | b[1] << 8), c1 = (uint16_t)(b[2] | b[3] << 8);
-  uint8_t pal[4][4];
-  auto expand = [](uint16_t c, uint8_t* p) {
-    p[0] = (uint8_t)(((c >> 11) & 31) * 255 / 31);
-    p[1] = (uint8_t)(((c >> 5) & 63) * 255 / 63);
-    p[2] = (uint8_t)((c & 31) * 255 / 31);
-    p[3] = 255;
-  };
-  expand(c0, pal[0]);
-  expand(c1, pal[1]);
-  if (!dxt1 || c0 > c1) {
-    for (int k = 0; k < 3; k++) {
-      pal[2][k] = (uint8_t)((2 * pal[0][k] + pal[1][k]) / 3);
-      pal[3][k] = (uint8_t)((pal[0][k] + 2 * pal[1][k]) / 3);
+static bool is_dxt(uint32_t fmt) { return fmt == FMT_DXT1 || fmt == FMT_DXT2 || fmt == FMT_DXT3 || fmt == FMT_DXT4 || fmt == FMT_DXT5; }
+
+/** ETC2/EAC is core in GLES 3.0 and in WebGL 2, so this is expected to be true everywhere. */
+static bool has_etc2() {
+  static int cached = -1;
+  if (cached < 0) {
+    const char* ver = (const char*)glGetString(GL_VERSION);
+    GLint major = 0;
+    if (ver) sscanf(ver, "%d", &major);  // "OpenGL ES 3.2 ..." and "WebGL 2.0 ..." both start with a digit
+    cached = major >= 3 ? 1 : 0;
+    if (!cached) {
+      GLint n = 0;
+      glGetIntegerv(GL_NUM_EXTENSIONS, &n);
+      for (GLint i = 0; i < n && !cached; i++) {
+        const char* e = (const char*)glGetStringi(GL_EXTENSIONS, (GLuint)i);
+        if (e && (strstr(e, "texture_compression_etc2") || strstr(e, "compressed_texture_etc"))) cached = 1;
+      }
     }
-    pal[2][3] = pal[3][3] = 255;
-  } else {
-    for (int k = 0; k < 3; k++) pal[2][k] = (uint8_t)((pal[0][k] + pal[1][k]) / 2), pal[3][k] = 0;
-    pal[2][3] = 255;
-    pal[3][3] = 0;
+    rt::log(rt::Log::Info, "GL: ETC2 %s", cached ? "supported (DXT art is transcoded)" : "not supported (DXT art is expanded to RGBA8)");
   }
-  uint32_t idx = (uint32_t)(b[4] | b[5] << 8 | b[6] << 16 | (uint32_t)b[7] << 24);
-  for (int i = 0; i < 16; i++) memcpy(out + 4 * i, pal[(idx >> (2 * i)) & 3], 4);
+  return cached == 1;
 }
 
 // Convert a D3D surface's memory to RGBA8 (row 0 first).
@@ -105,20 +113,7 @@ std::vector<uint8_t> to_rgba8(uint32_t fmt, const uint8_t* src, uint32_t w, uint
         if (fmt == FMT_DXT1) dxt_color(blk, px, true);
         else {
           dxt_color(blk + 8, px, false);
-          if (fmt == FMT_DXT2 || fmt == FMT_DXT3) {
-            for (int i = 0; i < 16; i++) px[4 * i + 3] = (uint8_t)(((blk[i / 2] >> (4 * (i & 1))) & 15) * 17);
-          } else {
-            uint8_t a0 = blk[0], a1 = blk[1], a[8] = {a0, a1};
-            if (a0 > a1) for (int k = 1; k < 7; k++) a[k + 1] = (uint8_t)(((7 - k) * a0 + k * a1) / 7);
-            else {
-              for (int k = 1; k < 5; k++) a[k + 1] = (uint8_t)(((5 - k) * a0 + k * a1) / 5);
-              a[6] = 0;
-              a[7] = 255;
-            }
-            uint64_t bits = 0;
-            for (int k = 0; k < 6; k++) bits |= (uint64_t)blk[2 + k] << (8 * k);
-            for (int i = 0; i < 16; i++) px[4 * i + 3] = a[(bits >> (3 * i)) & 7];
-          }
+          dxt_alpha(blk, px, fmt);
         }
         for (uint32_t y = 0; y < 4; y++)
           for (uint32_t x = 0; x < 4; x++) {
@@ -196,6 +191,9 @@ static void create_texture(uint32_t id, uint32_t kind, uint32_t w, uint32_t h, u
   GlFormat f = rt ? GlFormat{GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, false, false} : gl_format(fmt);
   t.gfmt = f;
   glTexStorage2D(t.target, (GLsizei)levels, f.internal, (GLsizei)w, (GLsizei)h);
+  // ETC2 keeps alpha as a *second* image inside the same level: the texture is allocated as
+  // RGBA8_EAC and `upload_texture` fills the colour blocks (RGB8 ETC2) and the alpha blocks (EAC)
+  // with two sub-image calls, which is why the allocation happens here and not per level.
   glTexParameteri(t.target, GL_TEXTURE_MAX_LEVEL, (GLint)levels - 1);
   g.tex[id] = t;
 }
@@ -209,7 +207,16 @@ static void upload_texture(uint32_t id, uint32_t face, uint32_t level, uint32_t 
   glBindTexture(t.target, t.gl);
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
   const GlFormat& f = t.gfmt;
-  if (f.compressed) {
+  if (f.compressed && is_dxt(fmt)) {
+    // A DXT surface: reshape the blocks into the ETC2 image(s) the texture was allocated for.
+    TranscodedLevel lv = transcode_level(fmt, data, w, h, pitch);
+    glCompressedTexSubImage2D(target, (GLint)level, 0, 0, (GLsizei)w, (GLsizei)h, GL_COMPRESSED_RGB8_ETC2,
+                              (GLsizei)lv.color.size(), lv.color.data());
+    if (!lv.alpha.empty()) {
+      glCompressedTexSubImage2D(target, (GLint)level, 0, 0, (GLsizei)w, (GLsizei)h, GL_COMPRESSED_RGBA8_ETC2_EAC,
+                                (GLsizei)lv.alpha.size(), lv.alpha.data());
+    }
+  } else if (f.compressed) {
     glCompressedTexSubImage2D(target, (GLint)level, 0, 0, (GLsizei)w, (GLsizei)h, f.internal, (GLsizei)(pitch * rows), data);
   } else if (f.expand) {
     auto rgba = to_rgba8(fmt, data, w, h, pitch);
