@@ -387,12 +387,12 @@ bool audio_open(int rate, void (*render)(float* out, int frames)) {
   aaudio_result_t err = aaudio_stream_builder_build(builder, &g_audio.stream);
   aaudio_stream_builder_delete(builder);
   if (err != AAUDIO_OK) {
-    LOGW("AAudio build failed: %s", aaudio_convertResultToText(err));
+    LOGW("AAudio build failed: %s", AAudio_convertResultToText(err));
     return false;
   }
   err = aaudio_stream_request_start(g_audio.stream);
   if (err != AAUDIO_OK) {
-    LOGW("AAudio start failed: %s", aaudio_convertResultToText(err));
+    LOGW("AAudio start failed: %s", AAudio_convertResultToText(err));
     return false;
   }
   LOGI("audio: %d Hz, %d channels", rate, 2);

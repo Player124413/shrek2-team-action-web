@@ -38,4 +38,4 @@ aaudio_result_t aaudio_stream_builder_build(AAudioStreamBuilder*, AAudioStream**
 aaudio_result_t aaudio_stream_request_start(AAudioStream*);
 aaudio_result_t aaudio_stream_stop(AAudioStream*);
 aaudio_result_t aaudio_stream_close(AAudioStream*);
-const char* aaudio_convertResultToText(aaudio_result_t);
+const char* AAudio_convertResultToText(aaudio_result_t);
