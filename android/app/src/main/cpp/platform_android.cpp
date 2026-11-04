@@ -371,26 +371,26 @@ bool audio_open(int rate, void (*render)(float* out, int frames)) {
   g_audio.render = render;
   g_audio.rate = rate;
   AAudioStreamBuilder* builder = nullptr;
-  if (aaudio_createStreamBuilder(&builder) != AAUDIO_OK) {
-    LOGW("aaudio_createStreamBuilder failed");
+  if (AAudio_createStreamBuilder(&builder) != AAUDIO_OK) {
+    LOGW("AAudio_createStreamBuilder failed");
     return false;
   }
-  aaudio_stream_builder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
-  aaudio_stream_builder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
-  aaudio_stream_builder_setSampleRate(builder, rate);
-  aaudio_stream_builder_setChannelCount(builder, 2);
-  aaudio_stream_builder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+  AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
+  AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
+  AAudioStreamBuilder_setSampleRate(builder, rate);
+  AAudioStreamBuilder_setChannelCount(builder, 2);
+  AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
   // 1024 frames keeps latency near 20 ms at 48 kHz while leaving the mixer enough slack to never
   // underrun on a busy frame; the mixer itself renders in fixed 256-frame tiles.
-  aaudio_stream_builder_setBufferCapacityInFrames(builder, 4096);
-  aaudio_stream_builder_setDataCallback(builder, audio_callback, nullptr);
-  aaudio_result_t err = aaudio_stream_builder_build(builder, &g_audio.stream);
-  aaudio_stream_builder_delete(builder);
+  AAudioStreamBuilder_setBufferCapacityInFrames(builder, 4096);
+  AAudioStreamBuilder_setDataCallback(builder, audio_callback, nullptr);
+  aaudio_result_t err = AAudioStreamBuilder_openStream(builder, &g_audio.stream);
+  AAudioStreamBuilder_delete(builder);
   if (err != AAUDIO_OK) {
     LOGW("AAudio build failed: %s", AAudio_convertResultToText(err));
     return false;
   }
-  err = aaudio_stream_request_start(g_audio.stream);
+  err = AAudioStream_requestStart(g_audio.stream);
   if (err != AAUDIO_OK) {
     LOGW("AAudio start failed: %s", AAudio_convertResultToText(err));
     return false;
