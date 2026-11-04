@@ -41,10 +41,14 @@ export ANDROID_NDK_HOME=$HOME/android-ndk-r27
 # 2. Bink decoders for arm64 (the runtime links them like the desktop build does)
 tools/build-ffmpeg-android.sh
 
-# 3. the AOT image for your own executable + the APK, with the update checks
-tools/build-apk.sh --exe "/path/to/Shrek 2.exe" --meta metadata/<sha256>.json
-adb install -r android/app/build/outputs/apk/release/app-release.apk
+# 3. the AOT image for your own executable + the debug APK, with the update checks
+tools/build-apk.sh --debug --exe "/path/to/Shrek 2.exe" --meta metadata/<sha256>.json
+adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 ```
+
+Only the debug variant is built: it is signed with the committed debug key, so it installs, and it
+replaces the installed app on every update (same package, higher versionCode, same certificate) without
+touching the game files.
 
 CI does the same on every push (`.github/workflows/android.yml`): the tests, the native syntax check and
 the release rules first, then the image, then the APK, and on a `v*` tag a release whose APK is proven
@@ -56,6 +60,8 @@ tools/ci-local.sh          # the workflow's `checks` job, step by step, on this 
 tools/ci-local.sh apk      # the build job (falls back to validation when there is no Gradle)
 tools/android-check.sh     # native platform layer compiles (-Werror) without an NDK
 tools/release-test.sh      # version codes, key generation, "will this APK replace the installed one?"
+tools/installer-test.sh    # the disc installer: a synthetic disc, installed by both implementations
+tools/android-stubs.sh     # the launcher type-checks against generated Android API stubs
 node tools/check-workflows.mjs   # the workflow itself: jobs, needs, step outputs, bash -n
 ```
 
@@ -106,6 +112,32 @@ Two things only a real NDK and a real linker caught:
   and `tools/build-ffmpeg-android.sh` links a probe `.so` after installing so a non-PIC build fails
   there instead of ten minutes later in Gradle.
 
+## Installing from a disc image
+
+"Install from your own disc" takes the **ISO image** of the retail disc -- not an installed folder, not
+an `.exe`. The launcher streams the image into `noBackupFilesDir/cache/disc.iso` (a `content://`
+document has no positional reads, and the installer needs random access), then reads it directly:
+
+| Step | Code |
+| --- | --- |
+| volume descriptor, Joliet directory tree | `install/Iso9660.kt` |
+| `SHREK2.MSI` as an OLE compound file | `install/Cfb.kt` |
+| string pool, schema, `File`/`Component`/`Directory`/`Media` | `install/Msi.kt` (layout in `Msi.kt`'s `readLayout`) |
+| cabinets named by the MSI `Media` table | `install/Cabinet.kt` |
+| LZX frames, 64 KiB window, 32 KiB CFB blocks | `install/Lzx.kt` |
+| MD5 of every installed file against `MsiFileHash` | `install/Md5.kt` |
+| the install itself, with progress | `install/Installer.kt` |
+
+The Kotlin code is a port of `installer/src/` (the TypeScript installer the web build uses), and the two
+are held together by `tools/installer-test.sh`: it generates a synthetic disc in the retail layout,
+installs it with the TypeScript implementation, and requires the Kotlin one to reproduce every file and
+every digest. That check runs on every push, in the `checks` job.
+
+Graphics settings (resolution, shadows, anti-aliasing, distance clipping, view distance) are on the same
+screen: they are written into `registry.txt`, the file the runtime's registry HLE reads, so the game
+picks them up at its next start. `Registry.kt`/`Settings.kt` mirror `web/src/registry.ts` and
+`web/src/settings.ts`, including the first-run defaults and the version-1 migration.
+
 ## Updating in place
 
 An APK only *replaces* an installed app when three things hold; Android refuses everything else:
@@ -134,7 +166,8 @@ is only more debuggable; it will not sit next to the game as a second app.
 
 ### The release key (optional, for publishing)
 
-When a release key is configured, the release variant uses it instead:
+When a release key is configured, a release build uses it instead (CI builds the debug variant only,
+the one a player installs; `tools/build-apk.sh` without `--debug` still produces a release APK locally):
 
 ```sh
 tools/android-keygen.sh          # once: creates android/release.jks + android/keystore.properties
@@ -172,13 +205,16 @@ complete — see `recomp/src/translate.ts`).
 | `runtime/src/gles/blocks.h` | shared with the desktop and web builds: DXT decode + ETC2/EAC transcode (`tools/etc2-test.sh` verifies it) |
 | `java/.../GameActivity.kt` | surface, lifecycle, keyboard/controller → JNI, back gesture → Escape |
 | `java/.../TouchOverlayView.kt` | the virtual pad and its bindings |
-| `java/.../LauncherActivity.kt` | install wizard and "Play" |
+| `java/.../LauncherActivity.kt` | disc-image install wizard, graphics settings, "Play" |
+| `java/.../install/` | the installer: ISO 9660, CFB, MSI, cabinets, LZX, MD5 (a port of `installer/src/`) |
 | `java/.../InstallFiles.kt` | install state and the `copyFile`/`finish` JNI calls |
 
 ## How a launch works
 
-1. `LauncherActivity` finds `files/install/Game/Shrek 2.exe`. If it is missing, it copies a folder the
-   player picks with the system file picker.
+1. `LauncherActivity` finds `files/install/Game/Shrek 2.exe`. If it is missing, "Install from your own
+   disc" asks for the ISO image of the player's disc, streams it into `files/cache/disc.iso` (a
+   `content://` document has no positional reads), installs the game out of it with `install/`, and
+   deletes the copy. Nothing is uploaded; the image never leaves the device.
 2. `GameActivity` creates the surface, unpacks `game.sk2a`/`game.skx` from the APK into `files/cache/`
    and calls `nativeStart(filesDir)`.
 3. `game_main.cpp` waits for the surface, maps the guest address space (`GUEST_BASE=0`, so the
@@ -234,12 +270,13 @@ checkerboards, 28 dB on alpha), and includes a bit-layout probe that fails if an
 
 * **arm64 only.** The code generator emits AArch64; there is no fallback interpreter in the APK. An
   arm32 or x86 phone cannot run this build.
+* **The disc must be an ISO image.** The installer reads ISO 9660/Joliet only; a raw `.bin`/`.cue` pair
+  or a mounted folder has to be turned into an ISO first. `installer/src/cli.ts` does the same job on a
+  build machine with the TypeScript implementation, which is what `tools/installer-test.sh` holds the
+  Kotlin one against.
 * **No on-device recompiler.** The AOT image is produced on a build machine (`aot/cli.ts`, which needs
   Node and the recompiler front end) and packaged. Running the front end on the phone would mean
   shipping QuickJS-ng plus the whole recompiler; that is a later step, not part of this scaffold.
-* **No on-device ISO parsing.** The CDFS/CAB/CFB decoders are the TypeScript ones in
-  `installer/src/`; the app copies an already-installed tree. `installer/src/cli.ts` can unpack a disc
-  on a build machine, and the folder copy path above takes it from there.
 * **Guest memory is a 4 GiB reservation.** `memory_init()` maps the window at `GUEST_BASE` with
   `MAP_NORESERVE`, which is fine for a 64-bit process but means the app cannot run in a 32-bit one.
 * **First frame latency.** The guest starts on its own thread; the activity shows the surface as soon
