@@ -129,6 +129,9 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
       toggleOverlay()
       return true
     }
+    // The game's own pads and full-screen apps send the back key; without this the overlay would
+    // swallow it while no pad control is being touched, and the player could not leave a menu.
+    if (keyCode == KeyEvent.KEYCODE_BACK) return false
     // Controller buttons arrive as key events; their state is folded into the pad struct so the HLE
     // DirectInput layer sees one consistent device.
     if (isPadKey(keyCode)) {

@@ -73,7 +73,9 @@ fi
 "$GRADLEW" --no-daemon "assemble${VARIANT^}"
 
 APK="$ROOT/android/app/build/outputs/apk/$VARIANT/app-$VARIANT.apk"
-[ -f "$APK" ] || { echo "no APK at $APK" >&2; exit 1; }
+# AGP appends -unsigned when there is no signing config.
+[ -f "$APK" ] || APK="$ROOT/android/app/build/outputs/apk/$VARIANT/app-$VARIANT-unsigned.apk"
+[ -f "$APK" ] || { echo "no APK in $ROOT/android/app/build/outputs/apk/$VARIANT/" >&2; exit 1; }
 
 # ---- 5. Inspect the result ---------------------------------------------------------------------------
 echo "== APK =="
@@ -94,12 +96,14 @@ unzip -l "$APK" | grep -E "lib/arm64-v8a/libshrek2\.so" || {
 unzip -l "$APK" | grep -qE "assets/game\.sk2a" || {
   echo "warning: the APK carries no AOT image; the launcher will say the game is not compiled" >&2
 }
-if [ "$VARIANT" = release ]; then
+if [ "$VARIANT" = release ] && [[ "$APK" != *-unsigned.apk ]]; then
   if [ -x "$BUILD_TOOLS/apksigner" ]; then
     "$BUILD_TOOLS/apksigner" verify "$APK" && echo "signature: ok (installs as an update)"
   else
     echo "warning: apksigner not found, the signature was not verified" >&2
   fi
+elif [ "$VARIANT" = release ]; then
+  echo "warning: the APK is unsigned; it cannot update an installed copy." >&2
 fi
 # Leave the tree clean: the image is a build input, not a source file.
 rm -f "$ASSETS/game.sk2a" "$ASSETS/game.skx"

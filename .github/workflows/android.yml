@@ -210,6 +210,7 @@ jobs:
           if [ -z "${SHREK2_KEYSTORE_BASE64:-}" ]; then
             echo "No release keystore secret: building an unsigned APK (it cannot update an installed one)."
             echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "keystore=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           mkdir -p "$RUNNER_TEMP/keys"
@@ -221,6 +222,7 @@ jobs:
             echo "keyPassword=$SHREK2_KEY_PASSWORD"
           } > android/keystore.properties
           echo "signed=true" >> "$GITHUB_OUTPUT"
+          echo "keystore=$RUNNER_TEMP/keys/release.jks" >> "$GITHUB_OUTPUT"
 
       - name: AOT image artifact
         if: needs.image.result == 'success'
@@ -233,7 +235,8 @@ jobs:
         env:
           SHREK2_VERSION_CODE: ${{ steps.version.outputs.code }}
           SHREK2_VERSION_NAME: ${{ steps.version.outputs.name }}
-          SHREK2_KEYSTORE: ${{ runner.temp }}/keys/release.jks
+          # Empty when the build is unsigned: build.gradle.kts then skips the signing config entirely.
+          SHREK2_KEYSTORE: ${{ steps.keystore.outputs.keystore }}
         working-directory: android
         run: |
           # No committed wrapper: generate one from the installed Gradle, then build with it.
@@ -242,7 +245,9 @@ jobs:
 
       - name: Inspect the APK
         run: |
+          # AGP writes app-release-unsigned.apk when there is no signing config.
           APK=android/app/build/outputs/apk/release/app-release.apk
+          [ -f "$APK" ] || APK=android/app/build/outputs/apk/release/app-release-unsigned.apk
           BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
           "$BT/aapt2" dump badging "$APK" | grep -E "^package:|^native-code:"
           if [ "${{ steps.keystore.outputs.signed }}" = "true" ]; then
@@ -260,6 +265,7 @@ jobs:
         id: apk
         run: |
           APK=android/app/build/outputs/apk/release/app-release.apk
+          [ -f "$APK" ] || APK=android/app/build/outputs/apk/release/app-release-unsigned.apk
           OUT="shrek2-${{ steps.version.outputs.name }}.apk"
           cp "$APK" "$OUT"
           echo "path=$OUT" >> "$GITHUB_OUTPUT"

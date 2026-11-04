@@ -60,7 +60,10 @@ case "$got" in
   *) echo "FAILED: version (one commit past v0.2.0): got '$got'"; fails=$((fails + 1)) ;;
 esac
 # A version code must never go backwards: the tag's code is above every code its own dev builds used.
-[ "200" -gt "102" ] && echo "ok: v0.2.0 (200) sorts above the dev builds of v0.1.0 (102)" || { echo "FAILED: version codes are not monotonic"; fails=$((fails + 1)); }
+# (Compared through variables, not literals, so the check is not constant-folded away.)
+old=102 new=200
+[ "$new" -gt "$old" ] && echo "ok: v0.2.0 ($new) sorts above the dev builds of v0.1.0 ($old)" \
+  || { echo "FAILED: version codes are not monotonic"; fails=$((fails + 1)); }
 # An explicit override wins (a rebuild of an already published release).
 got="$(SHREK2_VERSION_CODE=777 SHREK2_VERSION_NAME=7.7.7 "$ROOT/tools/android-version.sh" v9.9.9)"
 [ "$got" = "777 7.7.7" ] && echo "ok: override env wins" || { echo "FAILED: override ignored: $got"; fails=$((fails + 1)); }
@@ -96,8 +99,6 @@ chmod +x "$TMP/sdk/build-tools/35.0.0/"* "$TMP/bin/gh"
 export FRESH_APK="$TMP/apk"
 export ANDROID_SDK_ROOT="$TMP/sdk"
 export PATH="$TMP/bin:$PATH"
-# The "previous release" APK that `gh api` writes must look like a file apksigner can read.
-PREV_CLEANUP=1
 
 # No previous release in this fake environment: the certificate comparison must be skipped, which is
 # also what a first release looks like.
@@ -117,6 +118,38 @@ check "a changed signing key is refused" 1 \
   "$ROOT/tools/android-release-notes.sh" "$TMP/apk" 10203 10200
 check "an unsigned APK is refused" 1 \
   env FAKE_UNSIGNED=1 "$ROOT/tools/android-release-notes.sh" "$TMP/apk" 10203 10200
+
+# ---- 3. Key generation ----------------------------------------------------------------------------
+if command -v keytool >/dev/null; then
+  export SHREK2_KEYSTORE_PROPERTIES="$TMP/keys/keystore.properties"
+  export SHREK2_KEYSTORE_PASSWORD="test-$RANDOM-$RANDOM"
+  mkdir -p "$TMP/keys"
+  if "$ROOT/tools/android-keygen.sh" --out "$TMP/keys/release.jks" > "$TMP/keygen.log" 2>&1; then
+    echo "ok: key generation"
+  else
+    echo "FAILED: key generation"; sed 's/^/    /' "$TMP/keygen.log"; fails=$((fails + 1))
+  fi
+  [ -f "$SHREK2_KEYSTORE_PROPERTIES" ] && echo "ok: keystore.properties written" \
+    || { echo "FAILED: keystore.properties missing"; fails=$((fails + 1)); }
+  grep -q "^storeFile=release.jks" "$SHREK2_KEYSTORE_PROPERTIES" && echo "ok: storeFile is relative to android/" \
+    || { echo "FAILED: storeFile is not relative"; fails=$((fails + 1)); }
+  # The password must not leak into the properties in place of the key password, etc.
+  grep -q "^keyAlias=shrek2" "$SHREK2_KEYSTORE_PROPERTIES" && echo "ok: key alias" \
+    || { echo "FAILED: key alias"; fails=$((fails + 1)); }
+  # A second generation would silently change the key and break every installed copy.
+  "$ROOT/tools/android-keygen.sh" --out "$TMP/keys/release.jks" > /dev/null 2>&1 \
+    && { echo "FAILED: a second keygen overwrote the key"; fails=$((fails + 1)); } \
+    || echo "ok: a second keygen is refused"
+  # The key must be usable by the signer: check it with keytool itself.
+  if keytool -list -keystore "$TMP/keys/release.jks" -storepass "$SHREK2_KEYSTORE_PASSWORD" > /dev/null 2>&1; then
+    echo "ok: the keystore opens with the generated password"
+  else
+    echo "FAILED: the keystore does not open"; fails=$((fails + 1))
+  fi
+  unset SHREK2_KEYSTORE_PROPERTIES SHREK2_KEYSTORE_PASSWORD
+else
+  echo "SKIP  key generation (no keytool: install a JDK)"
+fi
 
 if [ "$fails" -eq 0 ]; then
   echo "ok: release rules verified ($fails failures)"

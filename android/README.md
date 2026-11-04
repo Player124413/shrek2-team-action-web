@@ -55,8 +55,10 @@ to install as an update over the previous one. The pieces that can run without a
 locally:
 
 ```sh
+tools/ci-local.sh          # the workflow's `checks` job, step by step, on this machine
+tools/ci-local.sh apk      # the build job (falls back to validation when there is no Gradle)
 tools/android-check.sh     # native platform layer compiles (-Werror) without an NDK
-tools/release-test.sh      # version codes + "will this APK replace the installed one?"
+tools/release-test.sh      # version codes, key generation, "will this APK replace the installed one?"
 node tools/check-workflows.mjs   # the workflow itself: jobs, needs, step outputs, bash -n
 ```
 

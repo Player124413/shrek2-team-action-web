@@ -24,8 +24,9 @@ val keystoreProperties = Properties().apply {
   if (keystorePropertiesFile.isFile) keystorePropertiesFile.inputStream().use { load(it) }
 }
 fun signingValue(key: String, env: String): String? =
-  keystoreProperties.getProperty(key) ?: System.getenv(env)
+  (keystoreProperties.getProperty(key) ?: System.getenv(env))?.takeIf { it.isNotBlank() }
 
+/** Null when there is no key: the release build is then unsigned instead of failing. */
 val releaseStoreFile = signingValue("storeFile", "SHREK2_KEYSTORE")
 
 android {
