@@ -279,6 +279,16 @@ jobs:
       - name: Inspect the APK
         run: |
           set -o pipefail
+          # Write what was built into the job summary: the artifact and the runner's log storage are not
+          # always reachable (this sandbox cannot download either), the summary always is.
+          {
+            echo "## APK"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| version | ${{ steps.version.outputs.name }} (${{ steps.version.outputs.code }}) |"
+            echo "| signed | ${{ steps.keystore.outputs.signed }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
           ls -l android/app/build/outputs/apk/release/ || true
           # AGP writes app-release-unsigned.apk when there is no signing config.
           APK=android/app/build/outputs/apk/release/app-release.apk
@@ -297,6 +307,11 @@ jobs:
           fi
           # The image is optional in a fork without the reference executable, so only warn.
           unzip -l "$APK" | grep -E "assets/game\.sk2a" || echo "::warning::the APK carries no AOT image"
+          {
+            echo "| file | $(basename "$APK") ($(du -h "$APK" | cut -f1)) |"
+            echo "| sha256 | $(sha256sum "$APK" | cut -d" " -f1) |"
+            echo "| native | arm64-v8a/libshrek2.so |"
+          } >> "$GITHUB_STEP_SUMMARY"
           # Remove the keystore before anything is archived.
           rm -f android/keystore.properties
 
