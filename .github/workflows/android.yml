@@ -314,8 +314,14 @@ jobs:
             echo "unsigned build: skipping signature verification"
           fi
           # The native library is what makes the APK an app at all.
-          if ! unzip -l "$APK" | grep -E "lib/arm64-v8a/libshrek2\.so"; then
+          if ! unzip -l "$APK" | grep -qE "lib/arm64-v8a/libshrek2\.so"; then
             echo "::error::the APK has no arm64 native library"; unzip -l "$APK" | head -20 | sed 's/^/::error::'; exit 1
+          fi
+          # The target is arm64 only: an APK that also carries x86 libraries means the ABI filter broke.
+          if unzip -l "$APK" | grep -E "^ *[0-9]+ .* lib/(x86|x86_64|armeabi)/" | grep -q .; then
+            echo "::error::the APK carries ABIs other than arm64-v8a"
+            unzip -l "$APK" | grep "lib/" | sed 's/^/::error::/'
+            exit 1
           fi
           # The image is optional in a fork without the reference executable, so only warn.
           unzip -l "$APK" | grep -E "assets/game\.sk2a" || echo "::warning::the APK carries no AOT image"
