@@ -262,6 +262,8 @@ jobs:
           SHREK2_KEYSTORE: ${{ steps.keystore.outputs.keystore }}
         working-directory: android
         run: |
+          # The runner's shell has no pipefail, and without it a pipeline through `tee` always "succeeds".
+          set -o pipefail
           # No committed wrapper: generate one from the installed Gradle, then build with it.
           [ -x ./gradlew ] || gradle wrapper --gradle-version 8.9 --no-daemon
           # The runner does not expose a step's log while it runs; repeat the tail as annotations so a
