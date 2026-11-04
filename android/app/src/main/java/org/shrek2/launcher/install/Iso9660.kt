@@ -22,6 +22,18 @@ class IsoImage(private val src: ByteSource) {
   )
 
   init {
+    // An ISO is written in whole 2048-byte sectors, so a file that is not a multiple of one was cut off
+    // somewhere: the tail of the last sector is simply missing. This is checked before anything is parsed,
+    // because a short tail can leave every structure readable and only the very last file damaged.
+    val partial = src.size % SECTOR
+    if (partial != 0L) {
+      val sectors = src.size / SECTOR
+      throw DiscException(
+        "the disc image is ${src.size} bytes, which is not a whole number of 2048-byte sectors: it is " +
+          "${SECTOR - partial} bytes short of $sectors sectors (${(sectors + 1) * SECTOR} bytes). The image " +
+          "is incomplete -- copy it again from the disc, completely",
+      )
+    }
     // A volume descriptor table that does not even fit is the signature of a cut-off image (an ISO is
     // written in 2048-byte sectors, so a good one is always a whole number of sectors).
     if (src.size < 17L * SECTOR) {
@@ -60,6 +72,16 @@ class IsoImage(private val src: ByteSource) {
     }
     if (pvd == null) throw DiscException("the image has no ISO 9660 primary volume descriptor")
     volumeId = Bytes.latin1(pvd, 40, 72).trim()
+    // The volume descriptor states how long the disc is (in logical blocks). A file shorter than that is
+    // a partial copy even when it happens to end on a sector boundary.
+    val declared = Bytes.u32(pvd, 80) * SECTOR
+    if (declared > 0 && declared > src.size) {
+      throw DiscException(
+        "the disc image is ${src.size} bytes, but its own volume descriptor says the disc is " +
+          "${declared / SECTOR} sectors long (${declared} bytes): ${declared - src.size} bytes are missing " +
+          "from the end. The image is incomplete -- copy it again from the disc, completely",
+      )
+    }
     joliet = svd != null
     root = parseRecord(svd ?: pvd, 156)
       ?: throw DiscException("the image has no root directory record (its volume descriptor is damaged)")

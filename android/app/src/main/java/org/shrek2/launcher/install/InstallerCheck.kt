@@ -71,7 +71,16 @@ object InstallerCheck {
 
     // A damaged or cut-off image must be reported as such, by name, and must not produce a raw bounds
     // failure: that failure is what a player saw on the phone, and it explains nothing.
-    for ((name, cut) in listOf("truncated image" to 20000, "image cut inside a directory" to -1)) {
+    // `cut` is how many bytes are missing from the end; -1 means "cut to 60 %". The first two are the
+    // shapes a real copy failure takes: a whole sector or more missing (the image's own volume descriptor
+    // says how long the disc is), and a short tail inside the last sector (the file is not a multiple of
+    // 2048) -- the latter is exactly what a phone reported, 48 bytes short of a sector boundary.
+    for ((name, cut) in listOf(
+      "image missing a whole sector" to 2048,
+      "image with a short tail" to 48,
+      "truncated image" to 20000,
+      "image cut inside a directory" to -1,
+    )) {
       val short = File(dir, "short.iso")
       val bytes = iso.readBytes()
       val keep = if (cut > 0) bytes.size - cut else (bytes.size * 3) / 5
