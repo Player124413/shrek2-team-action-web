@@ -22,4 +22,5 @@
   <string name="install_done">Installed.</string>
   <string name="install_warnings">Installed, with warnings: %1$s</string>
   <string name="install_failed">Installation failed: %1$s</string>
+  <string name="install_copy_incomplete">The copy stopped after %1$d of %2$d bytes, so the disc image is incomplete. Check that the file is on this device and not still downloading, then choose it again.</string>
 </resources>

@@ -28,7 +28,7 @@ class Cabinet(private val src: ByteSource) {
   init {
     val h = src.read(0, minOf(src.size, 64L * 1024).toInt())
     if (h.size < 36 || h[0].toInt() != 0x4d || h[1].toInt() != 0x53 || h[2].toInt() != 0x43 || h[3].toInt() != 0x46) {
-      throw IOException("not a cabinet (MSCF)")
+      throw IOException("is not a cabinet file: it does not start with MSCF (${h.size} bytes readable)")
     }
     val coffFiles = Bytes.u32(h, 16)
     val nFolders = Bytes.u16(h, 26)
@@ -71,7 +71,15 @@ class Cabinet(private val src: ByteSource) {
   }
 
   /** Decompress an entire folder into one buffer. */
-  fun extractFolder(index: Int): ByteArray {
+  fun extractFolder(index: Int): ByteArray = try {
+    extractFolderAt(index)
+  } catch (e: DiscException) {
+    // Every block's header says how long the block is; if the image ends before it does, the copy of the
+    // disc is short rather than the cabinet being broken -- and [e] already says exactly that.
+    throw e
+  }
+
+  private fun extractFolderAt(index: Int): ByteArray {
     val f = folders[index]
     val blocks = ArrayList<LongArray>() // offset, cb, uncompressed size
     var o = f.dataOffset

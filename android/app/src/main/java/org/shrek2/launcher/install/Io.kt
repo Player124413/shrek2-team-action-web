@@ -14,7 +14,7 @@ import java.io.RandomAccessFile
 interface ByteSource {
   val size: Long
 
-  /** Read exactly [length] bytes at [offset]; throws `IndexOutOfBoundsException` if out of range. */
+  /** Read exactly [length] bytes at [offset]; throws [DiscException] if that range is outside the source. */
   fun read(offset: Long, length: Int): ByteArray
 
   fun close() {}
@@ -57,9 +57,18 @@ class FileSource(private val file: File) : ByteSource {
   override fun close() = raf.close()
 }
 
+/**
+ * Bounds check for one read. The message is written for a player, not a programmer: on a phone the only
+ * thing this can mean in practice is that the file is shorter than it claims, which is what a cut-off
+ * copy of a disc image looks like.
+ */
 fun checkRange(offset: Long, length: Long, size: Long) {
   if (offset < 0 || length < 0 || offset + length > size) {
-    throw IndexOutOfBoundsException("read [$offset, +$length) outside source of size $size")
+    throw DiscException(
+      "the image is truncated or damaged: it claims data up to byte ${offset + length} " +
+        "(${offset + length - size} bytes past its ${size}-byte end). Copy the disc image again, " +
+        "completely, and retry",
+    )
   }
 }
 

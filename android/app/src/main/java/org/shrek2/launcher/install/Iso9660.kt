@@ -22,12 +22,31 @@ class IsoImage(private val src: ByteSource) {
   )
 
   init {
+    // A volume descriptor table that does not even fit is the signature of a cut-off image (an ISO is
+    // written in 2048-byte sectors, so a good one is always a whole number of sectors).
+    if (src.size < 17L * SECTOR) {
+      throw DiscException(
+        "the image is only ${src.size} bytes: it stops before its own volume descriptors, so the copy is " +
+          "incomplete. Copy the disc image again, completely, and retry",
+      )
+    }
     var pvd: ByteArray? = null
     var svd: ByteArray? = null
     var sector = 16
     while (sector < 64) {
-      val vd = src.read(sector * SECTOR.toLong(), SECTOR)
-      if (Bytes.latin1(vd, 1, 6) != "CD001") throw IllegalArgumentException("not an ISO 9660 image (sector $sector)")
+      val vd = try {
+        src.read(sector * SECTOR.toLong(), SECTOR)
+      } catch (e: DiscException) {
+        // Running out of image inside the descriptor table: either the table is shorter than an ISO's
+        // always is, or the file was cut short. Both mean "copy it again".
+        throw DiscException("the image ends before its volume descriptors do -- the copy is incomplete", e)
+      }
+      if (Bytes.latin1(vd, 1, 6) != "CD001") {
+        throw DiscException(
+          "not an ISO 9660 disc image: sector $sector does not start with CD001. Pick the .iso file of the " +
+            "disc itself, not a .bin/.cue pair or a mounted folder",
+        )
+      }
       val type = vd[0].toInt() and 0xff
       if (type == 255) break
       if (type == 1 && pvd == null) pvd = vd
@@ -39,10 +58,11 @@ class IsoImage(private val src: ByteSource) {
       }
       sector++
     }
-    if (pvd == null) throw IllegalArgumentException("ISO 9660 primary volume descriptor not found")
+    if (pvd == null) throw DiscException("the image has no ISO 9660 primary volume descriptor")
     volumeId = Bytes.latin1(pvd, 40, 72).trim()
     joliet = svd != null
-    root = parseRecord(svd ?: pvd, 156) ?: throw IllegalArgumentException("ISO 9660 root directory record is missing")
+    root = parseRecord(svd ?: pvd, 156)
+      ?: throw DiscException("the image has no root directory record (its volume descriptor is damaged)")
   }
 
   /** List a directory by slash-separated path ("" = root). Case-insensitive. */
@@ -65,7 +85,16 @@ class IsoImage(private val src: ByteSource) {
 
   fun open(path: String): ByteSource {
     val e = lookup(path)
-    if (e == null || e.isDir) throw NoSuchElementException("file not found in ISO: $path")
+    if (e == null || e.isDir) throw MemberException(path, "is not on the disc image")
+    // The directory says where the file is; the image has to be long enough to contain it. Checking here
+    // turns "read [x, +y) outside source" into the name of the file that is missing from the copy.
+    if (e.offset + e.size > src.size) {
+      throw MemberException(
+        path,
+        "is missing from the image: the disc places it at byte ${e.offset} and it is ${e.size} bytes long, " +
+          "but the image ends at ${src.size}. The copy of the disc image is incomplete; copy it again",
+      )
+    }
     return SliceSource(src, e.offset, e.size)
   }
 
@@ -80,7 +109,15 @@ class IsoImage(private val src: ByteSource) {
 
   private fun readDir(dir: IsoEntry): List<IsoEntry> {
     dirCache[dir.offset]?.let { return it }
-    val data = src.read(dir.offset, dir.size.toInt())
+    val data = try {
+      src.read(dir.offset, dir.size.toInt())
+    } catch (e: DiscException) {
+      throw DiscException(
+        "the disc's directory listing is not in the image: it should be at byte ${dir.offset}, but the file " +
+          "ends at ${src.size}. The copy of the disc image is incomplete",
+        e,
+      )
+    }
     val out = ArrayList<IsoEntry>()
     var o = 0
     while (o < data.size) {
@@ -121,7 +158,7 @@ class IsoImage(private val src: ByteSource) {
     }
     name = name.replace(Regex(";\\d+$"), "")
     if (flags and 2 == 0 && name.endsWith(".")) name = name.dropLast(1)
-    if (flags and 0x80 != 0) throw IllegalStateException("multi-extent ISO files are not supported: $name")
+    if (flags and 0x80 != 0) throw DiscException("this disc stores \"$name\" in several pieces, which is not supported")
     return IsoEntry(name, flags and 2 != 0, extent * SECTOR, size)
   }
 

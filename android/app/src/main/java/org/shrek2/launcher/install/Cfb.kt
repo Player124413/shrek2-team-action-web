@@ -27,9 +27,18 @@ class CompoundFile(bytes: ByteArray) {
   private val miniStream: ByteArray
 
   init {
-    if (bytes.size < 512) throw IOException("not an OLE compound file (too short)")
+    if (bytes.size < 512) throw IOException("is not a compound file (only ${bytes.size} bytes long)")
     val sig = byteArrayOf(0xd0.toByte(), 0xcf.toByte(), 0x11, 0xe0.toByte(), 0xa1.toByte(), 0xb1.toByte(), 0x1a, 0xe1.toByte())
-    for (i in sig.indices) if (b[i] != sig[i]) throw IOException("not an OLE compound file")
+    val head = byteArrayOf(0xd0.toByte(), 0xcf.toByte(), 0x11, 0xe0.toByte())
+    // MSI is always a compound file. A different signature means the disc holds something else (or the
+    // read landed on the wrong data), and saying which is much more useful than a bounds failure deeper.
+    if (!(head.indices).all { b[it] == head[it] }) {
+      throw IOException(
+        "is not an MSI database: it does not start with the compound-file signature " +
+          "(found ${(0 until 8).joinToString("") { "%02x".format(b[it]) }})",
+      )
+    }
+    for (i in sig.indices) if (b[i] != sig[i]) throw IOException("is a damaged compound file (bad signature tail)")
     if (Bytes.u16(b, 0x1c) != 0xfffe) throw IOException("unexpected CFB byte order mark")
     sectorSize = 1 shl Bytes.u16(b, 0x1e)
     miniSectorSize = 1 shl Bytes.u16(b, 0x20)

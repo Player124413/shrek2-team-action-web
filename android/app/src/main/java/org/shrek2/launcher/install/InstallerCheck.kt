@@ -69,6 +69,40 @@ object InstallerCheck {
       source.close()
     }
 
+    // A damaged or cut-off image must be reported as such, by name, and must not produce a raw bounds
+    // failure: that failure is what a player saw on the phone, and it explains nothing.
+    for ((name, cut) in listOf("truncated image" to 20000, "image cut inside a directory" to -1)) {
+      val short = File(dir, "short.iso")
+      val bytes = iso.readBytes()
+      val keep = if (cut > 0) bytes.size - cut else (bytes.size * 3) / 5
+      short.writeBytes(bytes.copyOf(keep.coerceAtLeast(0)))
+      // The damage only shows up once the data is read, not when the database is opened: install it.
+      val scratch = File(dir, "short-out").apply { deleteRecursively(); mkdirs() }
+      val message = try {
+        val source = FileSource(short)
+        try {
+          val disc = Installer.openDisc(source)
+          Installer.install(disc, DirSink(scratch))
+        } finally {
+          source.close()
+        }
+        null
+      } catch (e: Exception) {
+        "${e::class.java.simpleName}: ${e.message}"
+      } finally {
+        short.delete()
+        scratch.deleteRecursively()
+      }
+      when {
+        message == null -> fail("$name was accepted as a complete disc")
+        message.contains("IndexOutOfBounds") || message.contains("outside source") ->
+          fail("$name produced a raw bounds failure instead of an explanation: $message")
+        !message.contains("incomplete") && !message.contains("truncated") ->
+          fail("$name was rejected without saying the image is incomplete: $message")
+        else -> println("ok: $name is rejected with an explanation (${message.take(90)}...)")
+      }
+    }
+
     if (problems == 0) {
       println("ok: the Kotlin installer reproduces the corpus (${manifest.files.size} files, folder md5 ${manifest.folderMd5})")
       return

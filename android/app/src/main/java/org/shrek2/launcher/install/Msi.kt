@@ -96,13 +96,13 @@ class MsiDatabase(bytes: ByteArray) {
   fun tables(): List<String> = schema.keys.sorted()
 
   fun table(name: String): List<Row> {
-    val cols = schema[name] ?: throw IllegalArgumentException("MSI table not found: $name")
+    val cols = schema[name] ?: throw IllegalArgumentException("the database has no \"$name\" table")
     if (!streams.containsKey("!$name")) return emptyList() // declared but empty
     return readTable(name, cols)
   }
 
   fun stream(decodedName: String): ByteArray {
-    val e = streams[decodedName] ?: throw IOException("MSI stream not found: $decodedName")
+    val e = streams[decodedName] ?: throw IOException("the database has no \"$decodedName\" stream")
     return cfb.read(e)
   }
 

@@ -53,11 +53,31 @@ object Installer {
     val image = IsoImage(iso)
     for (e in image.list("")) {
       if (e.isDir || !e.name.lowercase().endsWith(".msi")) continue
-      val db = MsiDatabase(image.open(e.name).read(0, e.size.toInt()))
-      val layout = readLayout(db)
+      // Name every failure after the file it came from: on a phone this is the whole error message.
+      val bytes = try {
+        image.open(e.name).read(0, e.size.toInt())
+      } catch (x: InstallException) {
+        // Already written for the player, and already naming the file: do not prefix it twice.
+        throw x
+      } catch (x: Exception) {
+        throw MemberException(e.name, x.message ?: "cannot be read from the disc image", x)
+      }
+      val db = try {
+        MsiDatabase(bytes)
+      } catch (x: Exception) {
+        throw MemberException(e.name, "is not a readable installer database (${x.message})", x)
+      }
+      val layout = try {
+        readLayout(db)
+      } catch (x: Exception) {
+        throw MemberException(e.name, "has an incomplete installer database (${x.message})", x)
+      }
       if (layout.productName == PRODUCT_NAME) return Disc(image, db, layout)
     }
-    throw IOException("no $PRODUCT_NAME installer database found on this disc (volume ${image.volumeId})")
+    throw DiscException(
+      "this disc does not contain $PRODUCT_NAME: no installer database with that product name was found " +
+        "(volume \"${image.volumeId}\")",
+    )
   }
 
   /**
@@ -99,13 +119,26 @@ object Installer {
     for (m in layout.media.sortedBy { it.diskId }) {
       val cabinet = m.cabinet
       if (!cabinet.isNullOrEmpty()) {
-        val cabName = cabinet.removePrefix("#")
-        val cab = Cabinet(image.open(cabName))
+        // The MSI spells cabinets in upper case; use the disc's own spelling in any message.
+        val cabName = image.lookup(cabinet.removePrefix("#"))?.name ?: cabinet.removePrefix("#")
+        val cab = try {
+          Cabinet(image.open(cabName))
+        } catch (x: InstallException) {
+          throw x
+        } catch (x: Exception) {
+          throw MemberException(cabName, x.message ?: "cannot be read from the disc image", x)
+        }
         val members = cab.files.mapIndexed { i, cf -> cf to (byKey[cf.name] ?: bySeq[prevLast + i + 1]) }
         for (folder in cab.folders) {
           val inFolder = members.filter { (cf, f) -> cf.folder == folder.index && f != null && f.installPath != null }
           if (inFolder.isEmpty()) continue
-          val data = cab.extractFolder(folder.index)
+          val data = try {
+            cab.extractFolder(folder.index)
+          } catch (x: InstallException) {
+            throw x
+          } catch (x: Exception) {
+            throw MemberException(cabName, x.message ?: "cannot be unpacked", x)
+          }
           for ((cf, f) in inFolder) {
             val start = cf.offsetInFolder.toInt()
             val end = minOf(data.size, start + cf.size.toInt())

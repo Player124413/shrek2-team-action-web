@@ -257,6 +257,15 @@ class LauncherActivity : AppCompatActivity() {
           }
         } ?: throw IllegalStateException("cannot open the selected file")
 
+        // The copy is the one step that can silently produce a shorter file on a phone: a provider can
+        // stop early (a cancelled download, a background limit, an exhausted quota). The disc image's
+        // own length is known, and an installer failure 200 MB later would blame the wrong thing.
+        if (total > 0 && copied != total) {
+          throw IllegalStateException(
+            getString(R.string.install_copy_incomplete, copied, total),
+          )
+        }
+
         val root = InstallFiles.installDir(this)
         root.mkdirs()
         var summary: String? = null
