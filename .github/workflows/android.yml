@@ -336,14 +336,16 @@ jobs:
             echo "::error title=the APK does not verify::$(tr '\n' ' ' < sign.err | head -c 300)"
             exit 1
           fi
-          cat sign.txt
-          if ! grep -q "Signer #1 certificate SHA-256 digest" sign.txt; then
+          # `--print-certs` names the signer differently depending on the scheme (v3 shows "V3.0 Signer"),
+          # so any certificate line counts as signed.
+          if ! grep -E "certificate SHA-256 digest:" sign.txt > /dev/null; then
             echo "::error title=no signer certificate in the APK::$(head -c 200 sign.txt | tr '\n' ' ')"
             echo "=== assemble.log tail"
             tail -n 25 assemble.log 2>/dev/null || echo "(no assemble.log)"
             exit 1
           fi
-          cert="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' sign.txt | head -1)"
+          cert="$(sed -n 's/.*certificate SHA-256 digest: //p' sign.txt | head -1)"
+          dn="$(sed -n 's/.*certificate DN: //p' sign.txt | head -1)"
           echo "SIGNATURE ok: $(grep -c "^Verified using v[23] scheme" sign.txt) scheme(s), cert ${cert:0:16}..."
           # The native library is what makes the APK an app at all.
           # (`grep -q` would exit early, unzip would die of SIGPIPE, and `pipefail` would fail the step.)
@@ -362,7 +364,7 @@ jobs:
           echo "APK_RESULT name=$(basename "$APK") size=$(stat -c%s "$APK") sha256=$sha cert=$cert"
           {
             echo "| file | $(basename "$APK") ($(du -h "$APK" | cut -f1)) |"
-            echo "| certificate | ${cert:0:16}... |"
+            echo "| certificate | ${dn:-unknown} — ${cert:0:16}... |"
             echo "| sha256 | $sha |"
             echo "| native | arm64-v8a/libshrek2.so |"
             echo "| image | $(unzip -l "$APK" | grep -cE "assets/game\.sk2a") packaged |"
