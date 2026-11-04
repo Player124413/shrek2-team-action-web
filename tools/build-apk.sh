@@ -5,8 +5,8 @@
 #
 # What it guarantees, and why each step exists:
 #   * versionCode strictly increases (tools/android-version.sh) -- otherwise Android refuses the update;
-#   * the APK is signed with the project's release key (android/keystore.properties or SHREK2_* env) --
-#     otherwise Android refuses it as "a different app";
+#   * the APK is signed -- with the release key (android/keystore.properties or SHREK2_* env) when one is
+#     configured, otherwise with the committed debug key. An unsigned APK cannot be installed at all;
 #   * the AOT image is regenerated only when its input changed, because it is the expensive step and
 #     the cached image stays valid across app updates (nothing about it depends on the APK);
 #   * the finished APK is inspected: package, versionCode, signature, native ABI and asset presence.
@@ -54,8 +54,8 @@ echo "== version $SHREK2_VERSION_NAME ($SHREK2_VERSION_CODE) =="
 if [ -f "$ROOT/android/keystore.properties" ] || [ -n "${SHREK2_KEYSTORE:-}" ]; then
   echo "signing: release key $(basename "${SHREK2_KEYSTORE:-$(grep -m1 '^storeFile' "$ROOT/android/keystore.properties" | cut -d= -f2-)}")"
 else
-  echo "signing: NONE -- the APK will be unsigned and cannot update an installed copy." >&2
-  echo "         Create android/keystore.properties (see android/README.md, 'Updating in place')." >&2
+  # The committed debug key: the same in every checkout, so the APK installs and updates in place.
+  echo "signing: android/debug.keystore (debug key; for a publishing key run tools/android-keygen.sh)"
 fi
 
 # ---- 4. Gradle ---------------------------------------------------------------------------------------
@@ -103,7 +103,7 @@ if [ "$VARIANT" = release ] && [[ "$APK" != *-unsigned.apk ]]; then
     echo "warning: apksigner not found, the signature was not verified" >&2
   fi
 elif [ "$VARIANT" = release ]; then
-  echo "warning: the APK is unsigned; it cannot update an installed copy." >&2
+  echo "warning: the APK is unsigned; Android cannot install it. Check android/debug.keystore." >&2
 fi
 # Leave the tree clean: the image is a build input, not a source file.
 rm -f "$ASSETS/game.sk2a" "$ASSETS/game.skx"

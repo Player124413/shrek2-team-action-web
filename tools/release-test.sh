@@ -119,6 +119,42 @@ check "a changed signing key is refused" 1 \
 check "an unsigned APK is refused" 1 \
   env FAKE_UNSIGNED=1 "$ROOT/tools/android-release-notes.sh" "$TMP/apk" 10203 10200
 
+# ---- 2b. The keys and configuration the build uses -------------------------------------------------
+# The committed debug key is what makes an APK installable and updatable without any secret. It must
+# never change: a new key means every installed copy has to be uninstalled first.
+KEYSTORE="$ROOT/android/debug.keystore"
+if [ -f "$KEYSTORE" ]; then
+  echo "ok: android/debug.keystore is committed"
+  if keytool -list -keystore "$KEYSTORE" -storepass android -alias androiddebugkey > /dev/null 2>&1; then
+    echo "ok: the debug key opens (alias androiddebugkey, password android)"
+  else
+    echo "FAILED: the committed debug key does not open"; fails=$((fails + 1))
+  fi
+  # Android only accepts the well-known debug certificate details with the standard password.
+  if keytool -list -v -keystore "$KEYSTORE" -storepass android 2>/dev/null | grep -q "CN=Android Debug"; then
+    echo "ok: the debug certificate is CN=Android Debug"
+  else
+    echo "FAILED: the debug certificate is not CN=Android Debug"; fails=$((fails + 1))
+  fi
+else
+  echo "FAILED: android/debug.keystore is missing (builds would be signed with a key that changes)"; fails=$((fails + 1))
+fi
+
+# The build script must keep its promises: a signing config for both variants, no unsigned release.
+GRADLE="$ROOT/android/app/build.gradle.kts"
+check_gradle() { # check_gradle <description> <pattern>
+  if grep -qE "$2" "$GRADLE"; then echo "ok: gradle $1"; else echo "FAILED: gradle $1"; fails=$((fails + 1)); fi
+}
+check_gradle "always creates a release signing config" 'create\("release"\)'
+check_gradle "signs the release variant even without a release key" 'signingConfig = signingConfigs.getByName\("release"\)'
+check_gradle "signs the debug variant with the same key" 'signingConfig = signingConfigs.getByName\("debugkey"\)'
+if grep -qE 'applicationIdSuffix' "$GRADLE"; then
+  echo "FAILED: the debug variant has an applicationIdSuffix (it would install next to the release app)"
+  fails=$((fails + 1))
+else
+  echo "ok: debug and release share the package, so one replaces the other"
+fi
+
 # ---- 3. Key generation ----------------------------------------------------------------------------
 if command -v keytool >/dev/null; then
   export SHREK2_KEYSTORE_PROPERTIES="$TMP/keys/keystore.properties"

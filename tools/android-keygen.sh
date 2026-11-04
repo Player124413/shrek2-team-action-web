@@ -64,3 +64,6 @@ echo "  SHREK2_KEY_ALIAS          = $ALIAS"
 echo "  SHREK2_KEY_PASSWORD       = $PASS"
 echo
 echo "Back the keystore up somewhere safe: it cannot be regenerated."
+echo
+echo "Note: builds made before this key existed were signed with android/debug.keystore. The certificate"
+echo "changes, so players who installed one of those must uninstall it once before this build installs."

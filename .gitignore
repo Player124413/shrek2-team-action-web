@@ -27,6 +27,10 @@ android/local.properties
 *.jks
 *.keystore
 android/keystore.properties
+# The exception: the *debug* key is committed on purpose. It is public by definition (password
+# "android"), and it is what makes every build of this app the same app, so an installed copy can be
+# updated instead of uninstalled. See android/README.md, "Updating in place".
+!android/debug.keystore
 android/.gradle/
 android/app/.cxx/
 android/app/build/

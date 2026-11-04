@@ -6,18 +6,24 @@ plugins {
 }
 
 /**
- * Release signing.
+ * Signing.
  *
  * "Updating the app must not wipe the player's game" is a signing property, not a code one: Android
  * only replaces an installed app when the new APK carries the *same* signing key and a higher
- * versionCode. So the release build always uses one stable keystore:
+ * versionCode. So every APK this project ships is signed, and always with the same key:
  *
- *   1. android/keystore.properties (git-ignored) if it exists -- what a local machine uses;
- *   2. the SHREK2_KEYSTORE / SHREK2_KEYSTORE_PASSWORD / SHREK2_KEY_ALIAS / SHREK2_KEY_PASSWORD
- *      environment variables -- what CI uses, and where the keystore + password come from secrets;
- *   3. otherwise an unsigned build is produced (a debug-signed APK can never update a release one).
+ *   1. the release key, when it is configured -- android/keystore.properties (git-ignored, local) or
+ *      the SHREK2_KEYSTORE* environment variables (CI, from secrets);
+ *   2. otherwise the *committed* debug key (android/debug.keystore, password "android"), the same in
+ *      every checkout and on every runner. A fresh key would change with each build and every install
+ *      would be "app not installed: the package appears to be corrupt" or an update that needs an
+ *      uninstall. This is the default, so a build straight out of CI installs and updates in place.
  *
- * See android/README.md ("Updating in place") for how the key is created and kept.
+ * Debug and release variants use the same key and the same package on purpose: a debug build replaces
+ * the installed game instead of sitting next to it, and switching to the release key later is still an
+ * update, not a different app. `--debug` only changes debuggability.
+ *
+ * See android/README.md ("Updating in place") for how the release key is created and kept.
  */
 val keystorePropertiesFile = rootProject.file("keystore.properties")
 val keystoreProperties = Properties().apply {
@@ -26,23 +32,46 @@ val keystoreProperties = Properties().apply {
 fun signingValue(key: String, env: String): String? =
   (keystoreProperties.getProperty(key) ?: System.getenv(env))?.takeIf { it.isNotBlank() }
 
-/** Null when there is no key: the release build is then unsigned instead of failing. */
+/** The release key, when one is configured; null means "fall back to the committed debug key". */
 val releaseStoreFile = signingValue("storeFile", "SHREK2_KEYSTORE")
+
+/** The debug key shipped with the project; see the comment above. */
+val debugKeystore = rootProject.file("debug.keystore")
+require(debugKeystore.isFile) {
+  "android/debug.keystore is missing: without it every APK would be signed with a different key, and " +
+    "installed copies could not be updated. It is committed on purpose (see android/README.md)."
+}
 
 android {
   signingConfigs {
-    if (releaseStoreFile != null) {
-      create("release") {
+    // Always present, so no build type can end up unsigned (an unsigned APK cannot be installed at all).
+    create("release") {
+      if (releaseStoreFile != null) {
         // Relative to android/, where keystore.properties lives.
         storeFile = rootProject.file(releaseStoreFile)
         storePassword = signingValue("storePassword", "SHREK2_KEYSTORE_PASSWORD")
         keyAlias = signingValue("keyAlias", "SHREK2_KEY_ALIAS")
         keyPassword = signingValue("keyPassword", "SHREK2_KEY_PASSWORD")
-        // v1 is not needed for Android 8+; v2/v3 are what keep an update "the same app".
-        enableV1Signing = false
-        enableV2Signing = true
-        enableV3Signing = true
+      } else {
+        storeFile = debugKeystore
+        storePassword = "android"
+        keyAlias = "androiddebugkey"
+        keyPassword = "android"
       }
+      // v1 is not needed for Android 8+; v2/v3 are what keep an update "the same app".
+      enableV1Signing = false
+      enableV2Signing = true
+      enableV3Signing = true
+    }
+    create("debugkey") {
+      // Same key as the default: debug and release builds replace each other in place.
+      storeFile = debugKeystore
+      storePassword = "android"
+      keyAlias = "androiddebugkey"
+      keyPassword = "android"
+      enableV1Signing = false
+      enableV2Signing = true
+      enableV3Signing = true
     }
   }
 
@@ -89,12 +118,13 @@ android {
     release {
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      if (releaseStoreFile != null) signingConfig = signingConfigs.getByName("release")
+      // Signed even without a release key: with the project's debug key, so it installs and updates.
+      signingConfig = signingConfigs.getByName("release")
     }
     debug {
-      // A debug build installs side by side with a release one but cannot update it: different key.
-      applicationIdSuffix = ".debug"
-      versionNameSuffix = "-debug"
+      // The same package as the release build and the same key, so a debug build updates the installed
+      // game instead of sitting next to it: the player keeps their install, saves and settings.
+      signingConfig = signingConfigs.getByName("debugkey")
     }
   }
 

@@ -35,9 +35,6 @@ CMake — so neither the Kotlin nor the C++ has been compiled or run here. What 
 To build:
 
 ```sh
-# 0. once: create the signing key (see "Updating in place" below)
-tools/android-keygen.sh
-
 # 1. NDK r26+ (set ANDROID_NDK_HOME), JDK 17, Android SDK with platform 35
 export ANDROID_NDK_HOME=$HOME/android-ndk-r27
 
@@ -104,11 +101,37 @@ An APK only *replaces* an installed app when three things hold; Android refuses 
 | --- | --- |
 | same `applicationId` (`org.shrek2.launcher`) | `app/build.gradle.kts` |
 | strictly higher `versionCode` | `tools/android-version.sh` (tags: `v1.2.3` -> `10203`; dev: commit count) |
-| same signing certificate | `android/keystore.properties` / the `SHREK2_*` CI secrets |
+| same signing certificate | `android/debug.keystore` (committed), or `android/keystore.properties` / the `SHREK2_*` secrets |
 
-The key is created once (`tools/android-keygen.sh`, 4096-bit RSA, valid 10,000 days) and must be backed
-up: rotate it and every player has to uninstall, which also deletes their install and saves. CI compares
-the new APK's certificate with the last release's before publishing and fails the release if they differ.
+### The default: the committed debug key
+
+`android/debug.keystore` is **in the repository on purpose**: alias `androiddebugkey`, password
+`android`, `CN=Android Debug`. It is public by definition -- every Android build tool has one -- and it
+is the only way a build straight out of CI can be installed, let alone updated:
+
+* an **unsigned** APK cannot be installed at all: the phone says *"app not installed as package appears
+  to be corrupt"*;
+* a **newly generated** debug key on every runner changes the certificate, and Android then treats the
+  build as a different app: *"app not installed"*, or an update that demands uninstalling first;
+* with one committed key, every build of this app -- CI, a local `assembleDebug`, a local
+  `assembleRelease` -- carries the same certificate and replaces the installed copy in place.
+
+Debug and release variants share the package and the key, so they replace each other too. A debug build
+is only more debuggable; it will not sit next to the game as a second app.
+
+### The release key (optional, for publishing)
+
+When a release key is configured, the release variant uses it instead:
+
+```sh
+tools/android-keygen.sh          # once: creates android/release.jks + android/keystore.properties
+```
+
+CI reads the same key from `SHREK2_KEYSTORE_BASE64` and friends; without them it signs with the debug key
+and says so in the job summary. Switching from the debug key to a release key is a *change of
+certificate*: players who installed a debug-signed build have to uninstall once (losing their install)
+unless that switch is made before the first public release. Keep the release key backed up; CI compares
+each release's certificate with the previous release's and fails the release if it changed.
 
 What an update does *not* lose:
 
@@ -118,8 +141,8 @@ What an update does *not* lose:
 * the AOT image is re-unpacked only when the packaged one changed: `cache/image.version` holds the
   versionName that produced it.
 
-A *debug* build is deliberately a different app (`applicationIdSuffix = ".debug"`), so testing a debug
-APK never uninstalls the release one.
+A *debug* build is the same app: it updates the installed copy (same package, same key) instead of
+sharing the phone with a second, differently signed one.
 
 `--meta` is optional; without it the front end discovers functions itself (slower, slightly less
 complete — see `recomp/src/translate.ts`).

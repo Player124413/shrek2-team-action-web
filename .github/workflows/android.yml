@@ -232,7 +232,7 @@ jobs:
             exit 1
           fi
 
-      - name: Release keystore
+      - name: Signing key
         id: keystore
         env:
           SHREK2_KEYSTORE_BASE64: ${{ secrets.SHREK2_KEYSTORE_BASE64 }}
@@ -240,21 +240,25 @@ jobs:
           SHREK2_KEY_ALIAS: ${{ secrets.SHREK2_KEY_ALIAS }}
           SHREK2_KEY_PASSWORD: ${{ secrets.SHREK2_KEY_PASSWORD }}
         run: |
+          # Every APK is signed, because an unsigned one cannot be installed at all ("the package
+          # appears to be corrupt"). With no release key configured the build uses the debug key that is
+          # committed to the repository -- the same key in every checkout and on every runner, so each
+          # build replaces the installed app instead of fighting it.
           if [ -z "${SHREK2_KEYSTORE_BASE64:-}" ]; then
-            echo "No release keystore secret: building an unsigned APK (it cannot update an installed one)."
-            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "signed=debug" >> "$GITHUB_OUTPUT"
             echo "keystore=" >> "$GITHUB_OUTPUT"
+            echo "No release keystore secret: signing with android/debug.keystore (installs and updates in place)."
             exit 0
           fi
           mkdir -p "$RUNNER_TEMP/keys"
-          echo "$SHREK2_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/keys/release.jks"
+          printf '%s' "$SHREK2_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/keys/release.jks"
           {
             echo "storeFile=$RUNNER_TEMP/keys/release.jks"
             echo "storePassword=$SHREK2_KEYSTORE_PASSWORD"
             echo "keyAlias=$SHREK2_KEY_ALIAS"
             echo "keyPassword=$SHREK2_KEY_PASSWORD"
           } > android/keystore.properties
-          echo "signed=true" >> "$GITHUB_OUTPUT"
+          echo "signed=release" >> "$GITHUB_OUTPUT"
           echo "keystore=$RUNNER_TEMP/keys/release.jks" >> "$GITHUB_OUTPUT"
 
       - name: AOT image artifact
@@ -297,21 +301,23 @@ jobs:
             echo "| | |"
             echo "| --- | --- |"
             echo "| version | ${{ steps.version.outputs.name }} (${{ steps.version.outputs.code }}) |"
-            echo "| signed | ${{ steps.keystore.outputs.signed }} |"
+            echo "| signed with | ${{ steps.keystore.outputs.signed }} key ($(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' sign.txt | cut -c1-16)...) |"
             echo "| triggering ref | \`${{ github.ref }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
           ls -l android/app/build/outputs/apk/release/ || true
-          # AGP writes app-release-unsigned.apk when there is no signing config.
           APK=android/app/build/outputs/apk/release/app-release.apk
+          # A signed release is always app-release.apk; the fallback only makes the message clear if
+          # signing is ever removed again.
           [ -f "$APK" ] || APK=android/app/build/outputs/apk/release/app-release-unsigned.apk
           [ -f "$APK" ] || { echo "::error::no APK was produced"; exit 1; }
           BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
           "$BT/aapt2" dump badging "$APK" | grep -E "^package:|^native-code:"
-          if [ "${{ steps.keystore.outputs.signed }}" = "true" ]; then
-            "$BT/apksigner" verify --print-certs "$APK"
-          else
-            echo "unsigned build: skipping signature verification"
+          # The APK must verify: an unsigned or badly signed one shows up on the phone as
+          # "app not installed".
+          if ! "$BT/apksigner" verify --verbose --print-certs "$APK" | tee sign.txt; then
+            echo "::error::the APK does not verify"; exit 1
           fi
+          grep -q "Signer #1 certificate SHA-256 digest" sign.txt || { echo "::error::the APK is unsigned"; exit 1; }
           # The native library is what makes the APK an app at all.
           if ! unzip -l "$APK" | grep -qE "lib/arm64-v8a/libshrek2\.so"; then
             echo "::error::the APK has no arm64 native library"; unzip -l "$APK" | head -20 | sed 's/^/::error::'; exit 1
@@ -356,7 +362,7 @@ jobs:
   release:
     name: Publish release
     needs: apk
-    if: startsWith(github.ref, 'refs/tags/v') && needs.apk.outputs.signed == 'true'
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
