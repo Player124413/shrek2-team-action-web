@@ -81,6 +81,19 @@ Secrets (optional -- without them the APK is built unsigned and never published)
 Everything the workflow does can be run locally: `tools/ci-local.sh` for the step order,
 `node tools/check-workflows.mjs` for the file itself.
 
+### Why an APK said "app not installed ... package appears to be corrupt"
+
+An **unsigned** APK cannot be installed at all, and before this the workflow produced one whenever the
+release-key secrets were absent (`app-release-unsigned.apk`). Now:
+
+* every build is signed: the release key when it is configured, otherwise `android/debug.keystore`;
+* the release and debug variants share the package and the key, so they replace each other in place;
+* the workflow fails if `apksigner` does not verify the APK, or if it finds no signer certificate --
+  the build cannot quietly publish something a phone will refuse.
+
+Installing over an older build that was signed with a *different* key (any build made before the
+committed debug key existed) still requires one uninstall; from then on updates apply in place.
+
 ### Notes from the first real runs
 
 Two things only a real NDK and a real linker caught:
