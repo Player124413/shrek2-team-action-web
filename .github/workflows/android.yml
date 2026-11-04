@@ -204,7 +204,9 @@ jobs:
           # One path, so the downloaded source is cached with the result: a build that has to retry the
           # download does not have to do it again on the next run.
           path: work/tools
-          key: ffmpeg-android-${{ env.FFMPEG_VERSION }}-${{ env.NDK_VERSION }}
+          # Keyed on the build scripts too: a change to how FFmpeg is configured must not be served a
+          # stale archive from the cache (that is how a non-PIC build reached the linker).
+          key: ffmpeg-android-${{ env.FFMPEG_VERSION }}-${{ env.NDK_VERSION }}-${{ hashFiles('tools/build-ffmpeg-android.sh', '.github/scripts/fetch-ffmpeg-android.sh') }}
 
       - name: FFmpeg for arm64 (Bink decoders)
         id: ffmpeg

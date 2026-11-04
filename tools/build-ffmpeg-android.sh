@@ -32,6 +32,9 @@ TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/$HOST_TAG"
 export PATH="$TOOLCHAIN/bin:$PATH"
 mkdir -p "$BUILD"
 cd "$BUILD"
+# --enable-pic is not optional: the archive is linked into libshrek2.so, so every object must be
+# position independent. Without it FFmpeg compiles for a static link and ld.lld rejects the absolute
+# data relocations (R_AARCH64_ADR_PREL_PG_HI21 against a libavutil table) when building the library.
 "$SRC/configure" \
   --prefix="$OUT" --target-os=android --arch=aarch64 --enable-cross-compile \
   --cc="$TOOLCHAIN/bin/aarch64-linux-android$API-clang" \
@@ -43,7 +46,8 @@ cd "$BUILD"
   --disable-swresample --disable-swscale --disable-avfilter --disable-vulkan \
   --enable-decoder=bink --enable-decoder=binkaudio_rdft --enable-decoder=binkaudio_dct \
   --enable-static --disable-shared \
-  --extra-cflags="-O3 -fPIC" --extra-ldflags="-fPIC"
+  --enable-pic \
+  --extra-cflags="-O3 -fPIC -DPIC" --extra-ldflags="-fPIC"
 make -j"$(nproc)"
 make install
 echo "FFmpeg for Android arm64 installed in $OUT"
