@@ -326,8 +326,10 @@ jobs:
           # "app not installed".
           # `set -o pipefail` is already on: a failing apksigner is not hidden by the tee.
           if ! "$BT/apksigner" verify --verbose --print-certs "$APK" > sign.txt 2>&1; then
-            echo "::error title=the APK does not verify::$(tail -n 3 sign.txt | tr '\n' ' ')"
-            sed 's/^/::error::/' sign.txt | tail -n 10
+            # Normal output and errors both land in sign.txt; the whole thing goes to the log.
+            echo "=== apksigner output"
+            cat sign.txt
+            echo "::error title=the APK does not verify::$(grep -iE "error|exception|does not|missing" sign.txt | head -3 | tr '\n' ' ')"
             exit 1
           fi
           cat sign.txt
