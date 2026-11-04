@@ -3,7 +3,14 @@
 #include <cstdio>
 #if !defined(__EMSCRIPTEN__)
 #include <sys/time.h>
+// ucontext_t is only needed to read the interrupted PC, and only x86-64 has the layout this file
+// knows; other architectures (arm64 Android, where the app runs) compile the profiler out.
+#if defined(__x86_64__) && !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
+#define SHREK2_PROFILER 1
 #include <ucontext.h>
+#else
+#define SHREK2_PROFILER 0
+#endif
 #endif
 #include <cstdlib>
 #include <map>
@@ -290,7 +297,10 @@ void note_present() { g_last_present_ms = now_ms(); }
 // ---- Sampling profiler (SHREK2_PROFILE=start_s:duration_s) --------------------------------------
 // SIGPROF every millisecond of process CPU time records the interrupted host PC; the raw samples
 // are written to work/profile.txt and symbolised offline (tools/profile.py).
-#if defined(__EMSCRIPTEN__)
+#if !SHREK2_PROFILER
+// The sampling profiler reads the interrupted host PC out of a ucontext_t, which this file can only do
+// on x86-64 Linux. Everywhere else it is a no-op: the game does not need it, and a phone has no
+// /proc/self/maps to attribute samples with anyway.
 static void profiler_start() {}
 #else
 static constexpr size_t kProfMax = 1 << 22;

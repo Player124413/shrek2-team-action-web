@@ -26,6 +26,27 @@ FLAGS=(
 )
 
 status=0
+
+# The runtime sources the NDK build compiles for arm64. They also build on the host, which catches the
+# class of error that cost a CI run: code that only compiles for x86-64 (ucontext_t field names, glibc
+# extensions, `#ifdef __x86_64__` left unguarded) is fine on a desktop and a hard error on a phone.
+# These are checked with the files' own `#if` conditions, not by simulating an architecture.
+RUNTIME=(
+  "$ROOT/runtime/src/core/core.cpp"
+  "$ROOT/runtime/src/core/memory.cpp"
+  "$ROOT/runtime/src/core/objects.cpp"
+)
+for f in "${RUNTIME[@]}"; do
+  printf '%-22s ' "$(basename "$f")"
+  if out=$("$CXX_BIN" "${FLAGS[@]}" "$f" 2>&1); then
+    echo "ok"
+  else
+    echo "FAILED"
+    echo "$out" | head -40
+    status=1
+  fi
+done
+
 for f in platform_android.cpp aot_module.cpp game_main.cpp install_files.cpp; do
   printf '%-22s ' "$f"
   if out=$("$CXX_BIN" "${FLAGS[@]}" "$CPP/$f" 2>&1); then
