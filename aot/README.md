@@ -36,3 +36,24 @@ Shrek 2.exe --recomp/--> IR --aot/--> ARM64 machine code --mmap(PROT_EXEC)--> na
 Run `node aot/test/enc.test.mjs`, `node aot/test/arch.test.mjs` and `node aot/test/module.test.mjs`
 (needs `python3 -m pip install unicorn capstone`). `CASES=<n>` sets how many random functions
 `arch.test.mjs` generates; `DUMP=<index>` prints the IR and the compiled code of one case.
+
+## Building an image
+
+`cli.ts` is what the Android build calls. It lifts every function of the executable's front end to IR,
+compiles it, and writes the three files the APK carries:
+
+```sh
+node aot/cli.ts image "/path/to/Shrek 2.exe" --meta metadata/<sha256>.json --out work/aot
+node aot/cli.ts check work/aot
+```
+
+* `game.sk2a` — the relocatable image (format above);
+* `game.skx` — the side table the loader needs: `guestAddress codeOffset` per function (the image does
+  not store function sizes), then one trap message per line in image-wide id order;
+* `aot.txt` — a one-line summary.
+
+Trap ids are shared by the whole image (`new Arm64FunctionEmitter(fn, shared)`), because the runtime
+receives a bare integer from `rt_trap_id`.
+
+The loader on the other side is `android/app/src/main/cpp/aot_module.cpp`; the two halves of the
+format have to change together, and `aot/cli.ts check` validates the bounds the loader enforces.

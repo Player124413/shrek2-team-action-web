@@ -1,0 +1,11 @@
+{
+  "name": "@shrek2/aot-cli",
+  "private": true,
+  "type": "module",
+  "description": "Compiles the translated game IR to an ARM64 image for the Android build of the runtime",
+  "bin": { "shrek2-aot": "./cli.ts" },
+  "scripts": {
+    "image": "node cli.ts image",
+    "check": "node cli.ts check"
+  }
+}

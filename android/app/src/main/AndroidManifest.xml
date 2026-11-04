@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+  <!-- The game is a 2004 DirectX 9 title: GLES 3.0 (D3D9 emulation) is the floor. -->
+  <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+  <uses-feature android:name="android.hardware.gamepad" android:required="false" />
+  <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+
+  <!-- Installer: the player picks their own disc image / install directory. -->
+  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+
+  <application
+      android:label="Shrek 2: Team Action"
+      android:icon="@drawable/ic_launcher"
+      android:fullBackupContent="@xml/backup_rules"
+      android:hardwareAccelerated="true"
+      android:allowBackup="false"
+      android:largeHeap="true"
+      android:theme="@style/Theme.Shrek2">
+
+    <!-- The launcher owns the install wizard and the binding screen. -->
+    <!-- The game surface lives in GameActivity: a SurfaceView we hand to EGL, with the touch overlay
+         drawn on top. Configuration changes (rotation, keyboard) must not restart the process,
+         because the guest game keeps running on its own thread. -->
+    <activity
+        android:name=".LauncherActivity"
+        android:exported="true"
+        android:configChanges="orientation|screenSize|screenLayout|uiMode">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+    </activity>
+
+    <activity
+        android:name=".GameActivity"
+        android:exported="false"
+        android:launchMode="singleTask"
+        android:screenOrientation="landscape"
+        android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density"
+        android:resizeableActivity="false" />
+
+    <meta-data android:name="android.max_aspect" android:value="2.4" />
+  </application>
+</manifest>

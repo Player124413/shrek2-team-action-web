@@ -280,5 +280,8 @@ export function relocate(mod: ParsedModule, targets: RelocationTargets, write: P
 
 /** Compile a program's IR functions into one loadable module. */
 export function compileFunctions(funcs: IrFunc[], opts: BuildOptions = {}): BuiltModule {
-  return buildModule(funcs.map((f) => new Arm64FunctionEmitter(f).emit()), opts);
+  // One trap table for the whole image: the runtime resolves a trap id against the image, and the
+  // generated code can only pass the id it was compiled with.
+  const shared = { traps: [] as string[] };
+  return buildModule(funcs.map((f) => new Arm64FunctionEmitter(f, shared).emit()), opts);
 }

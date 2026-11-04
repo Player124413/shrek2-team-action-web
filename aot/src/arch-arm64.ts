@@ -180,8 +180,11 @@ export class Arm64FunctionEmitter {
   /** True once guest code assigned ESP (then the mirror register is authoritative). */
   private espDirty = false;
 
-  constructor(f: IrFunc) {
+  constructor(f: IrFunc, shared?: { traps: string[] }) {
     this.f = f;
+    // Trap ids travel to the runtime as a bare integer (`rt_trap_id(cpu, id)`), so a build that
+    // links several functions has to share one table: pass `shared.traps` to get image-wide ids.
+    if (shared) this.traps = shared.traps;
     for (const [name, ty] of f.locals) this.types.set(name, ty);
   }
 
