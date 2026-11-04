@@ -274,9 +274,12 @@ jobs:
 
       - name: Inspect the APK
         run: |
+          set -o pipefail
+          ls -l android/app/build/outputs/apk/release/ || true
           # AGP writes app-release-unsigned.apk when there is no signing config.
           APK=android/app/build/outputs/apk/release/app-release.apk
           [ -f "$APK" ] || APK=android/app/build/outputs/apk/release/app-release-unsigned.apk
+          [ -f "$APK" ] || { echo "::error::no APK was produced"; exit 1; }
           BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
           "$BT/aapt2" dump badging "$APK" | grep -E "^package:|^native-code:"
           if [ "${{ steps.keystore.outputs.signed }}" = "true" ]; then
@@ -284,7 +287,10 @@ jobs:
           else
             echo "unsigned build: skipping signature verification"
           fi
-          unzip -l "$APK" | grep -E "lib/arm64-v8a/libshrek2\.so"
+          # The native library is what makes the APK an app at all.
+          if ! unzip -l "$APK" | grep -E "lib/arm64-v8a/libshrek2\.so"; then
+            echo "::error::the APK has no arm64 native library"; unzip -l "$APK" | head -20 | sed 's/^/::error::'; exit 1
+          fi
           # The image is optional in a fork without the reference executable, so only warn.
           unzip -l "$APK" | grep -E "assets/game\.sk2a" || echo "::warning::the APK carries no AOT image"
           # Remove the keystore before anything is archived.
