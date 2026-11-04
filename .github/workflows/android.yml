@@ -324,12 +324,16 @@ jobs:
           "$BT/aapt2" dump badging "$APK" | grep -E "^package:|^native-code:"
           # The APK must verify: an unsigned or badly signed one shows up on the phone as
           # "app not installed".
-          # `set -o pipefail` is already on: a failing apksigner is not hidden by the tee.
-          if ! "$BT/apksigner" verify --verbose --print-certs "$APK" > sign.txt 2>&1; then
-            # Normal output and errors both land in sign.txt; the whole thing goes to the log.
-            echo "=== apksigner output"
+          # `apksigner` writes "Verifies" and the schemes to stdout and everything else to stderr, so the
+          # two streams are kept apart: "the APK is corrupt" is the message that matters, and it is a
+          # non-zero exit plus something on stderr.
+          if "$BT/apksigner" verify --print-certs "$APK" > sign.txt 2> sign.err; then
             cat sign.txt
-            echo "::error title=the APK does not verify::$(grep -iE "error|exception|does not|missing" sign.txt | head -3 | tr '\n' ' ')"
+            if [ -s sign.err ]; then echo "apksigner warnings:"; cat sign.err; fi
+          else
+            echo "=== apksigner stdout"; cat sign.txt
+            echo "=== apksigner stderr"; cat sign.err
+            echo "::error title=the APK does not verify::$(tr '\n' ' ' < sign.err | head -c 300)"
             exit 1
           fi
           cat sign.txt
