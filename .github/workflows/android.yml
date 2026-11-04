@@ -17,8 +17,10 @@
 name: Android APK
 
 on:
+  # Every branch: a feature branch must see its own results before it is merged. Testing showed why --
+  # with `branches: [main]` a push to a working branch started no run at all.
   push:
-    branches: [main]
+    branches: ['**']
     tags: ['v*']
   pull_request:
   workflow_dispatch:
