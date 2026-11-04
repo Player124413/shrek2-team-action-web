@@ -264,7 +264,13 @@ jobs:
         run: |
           # No committed wrapper: generate one from the installed Gradle, then build with it.
           [ -x ./gradlew ] || gradle wrapper --gradle-version 8.9 --no-daemon
-          ./gradlew --no-daemon --stacktrace assembleRelease
+          # The runner does not expose a step's log while it runs; repeat the tail as annotations so a
+          # failure is diagnosable from the API.
+          if ! ./gradlew --no-daemon --stacktrace assembleRelease 2>&1 | tee ../assemble.log; then
+            grep -E "error:|e: |FAILURE|What went wrong|Caused by|^\* " -A2 ../assemble.log | tail -n 40 | sed 's/^/::error::/' || true
+            tail -n 20 ../assemble.log | sed 's/^/::error::/'
+            exit 1
+          fi
 
       - name: Inspect the APK
         run: |
