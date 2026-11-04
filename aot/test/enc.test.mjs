@@ -330,9 +330,9 @@ test("fmov32 bits", (a) => a.fmovToGpr(false, 0, 1), { dregs: { d1: BigInt(bitsF
   { regs: { x0: bitsF32(1.5) } });
 test("fmov32 in", (a) => a.fmovFromGpr(false, 0, 1), { regs: { x1: bitsF32(-2.5) } },
   { dregs: { d0: BigInt(bitsF32(-2.5)) } });
-test("fldrd", (a) => a.fldr(8, 0, 9, 8), { regs: { x9: DATA }, mem: [[DATA + 8, Buffer.from(new Float64Array([-12.5]).buffer)]] },
+test("fldrd", (a) => a.fldrScalar(8, 0, 9, 8), { regs: { x9: DATA }, mem: [[DATA + 8, Buffer.from(new Float64Array([-12.5]).buffer)]] },
   { dregs: { d0: -12.5 } });
-test("fstrd", (a) => a.fstr(8, 1, 9, 16), { regs: { x9: DATA }, dregs: { d1: 12.5 } },
+test("fstrd", (a) => a.fstrScalar(8, 1, 9, 16), { regs: { x9: DATA }, dregs: { d1: 12.5 } },
   { mem: [[DATA + 16, Buffer.from(new Float64Array([12.5]).buffer)]] });
 test("ldurd", (a) => a.ldurd(0, 9, -8), { regs: { x9: DATA + 64 }, mem: [[DATA + 56, Buffer.from(new Float64Array([7.5]).buffer)]] },
   { dregs: { d0: 7.5 } });
@@ -340,7 +340,7 @@ test("fldrReg", (a) => a.fldrReg(8, 0, 9, 10), { regs: { x9: DATA, x10: 24 }, me
   { dregs: { d0: 3.5 } });
 test("fstrReg", (a) => a.fstrReg(8, 1, 9, 10), { regs: { x9: DATA, x10: 32 }, dregs: { d1: -3.5 } },
   { mem: [[DATA + 32, Buffer.from(new Float64Array([-3.5]).buffer)]] });
-test("fldrs/fstrs", (a) => { a.fstr(4, 1, 9, 0); a.fldr(4, 0, 9, 0); }, { regs: { x9: DATA }, dregs: { d1: BigInt(bitsF32(1.5)) } },
+test("fldrs/fstrs", (a) => { a.fstrScalar(4, 1, 9, 0); a.fldrScalar(4, 0, 9, 0); }, { regs: { x9: DATA }, dregs: { d1: BigInt(bitsF32(1.5)) } },
   { dregs: { d0: BigInt(bitsF32(1.5)) } });
 
 // ---- Emit and run -----------------------------------------------------------------------------

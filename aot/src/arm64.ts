@@ -49,6 +49,8 @@ export class Assembler {
   private dv = new DataView(this.buf.buffer);
   len = 0;
   private fixups: Fixup[] = [];
+  private tableAbs: { at: number; label: string }[] = [];
+  private resolvedTables: { at: number; target: number }[] = [];
   private labels = new Map<string, number>();
   private seq = 0;
 
@@ -103,6 +105,11 @@ export class Assembler {
 
   /** Patch all fixups and return the machine code. */
   finish(): Uint8Array {
+    for (const e of this.tableAbs) {
+      const target = this.labels.get(e.label);
+      if (target === undefined) throw new Error(`unresolved label ${e.label}`);
+      this.resolvedTables.push({ at: e.at, target });
+    }
     for (const f of this.fixups) {
       const target = this.labels.get(f.label);
       if (target === undefined) throw new Error(`unresolved label ${f.label}`);
@@ -171,6 +178,57 @@ export class Assembler {
     this.dv.setUint32(at, (base | (nz ? 0x01000000 : 0) | (sf ? 0x80000000 : 0) | reg(rt)) >>> 0, true);
     this.fixups.push({ at, label, kind: "bcond", patchShift: 5, patchMask: 0x7ffff });
     return this;
+  }
+
+  /**
+   * Dense switch on `index` (already bounds-checked by the caller).
+   *
+   * AArch64 can only branch through a table with `br` (an absolute address), so the table holds
+   * the absolute address of each case. Those entries are patched by the module loader
+   * (`tableRelocations()` reports them as function-relative offsets), which keeps the code
+   * position-independent and lets the same module load at any address:
+   *
+   *     adr  x16, table
+   *     lsl  w17, index, #3
+   *     ldr  x18, [x16, w17, uxtw]
+   *     br   x18
+   *     b    skip
+   *   table: .quad case0, case1, ...
+   *   skip:
+   */
+  switchTableAbs(index: number, labels: string[]): void {
+    const table = this.fresh("jt");
+    const skip = this.fresh("js");
+    this.adr(16, table);
+    this.shiftImm(17, index, "lsl", 3, false);
+    this.ldrReg(8, 18, 16, 17, 2);
+    this.br(18);
+    this.b(skip);
+    this.bind(table);
+    for (const label of labels) {
+      const at = this.ensure(8);
+      this.dv.setBigUint64(at, 0n, true);
+      this.tableAbs.push({ at, label });
+    }
+    this.bind(skip);
+  }
+
+  /** Function-relative offsets of absolute table entries, resolved after assembly. */
+  finishTables(): { at: number; target: number }[] {
+    return this.resolvedTables;
+  }
+
+  /**
+   * Materialise an absolute 64-bit address into `rd` as exactly four instructions (MOVZ + 3 MOVKs)
+   * and return the offset of the first one; the loader patches the immediate fields.
+   */
+  movAbs64(rd: number): number {
+    const at = this.ensure(16);
+    for (let i = 0; i < 4; i++) {
+      const w = i === 0 ? 0xd2800000 | reg(rd) : 0xf2800000 | (i << 21) | reg(rd);
+      this.dv.setUint32(at + 4 * i, w >>> 0, true);
+    }
+    return at;
   }
 
   /** BL to a label (patched at assembly end). */
@@ -399,6 +457,29 @@ export class Assembler {
     return this.word((sf ? 0x9ac02c00 : 0x1ac02c00) | (reg(rm) << 16) | (reg(rn) << 5) | reg(rd));
   }
 
+  /**
+   * Variable shift `Xd = Xn <<shift> (Xm & (31|63))` with WebAssembly's masking.
+   *
+   * AArch64 takes the shift amount modulo the element size only in the 32-bit encodings; the
+   * 64-bit ones use 6 bits. We mask explicitly (so the code works for both widths) and handle the
+   * zero/over-large counts with the carry-out of a compare (CSEL -1 / 0):
+   *   cmp xm, #31 ; csel tmp, xzr, xm, LS      -> tmp = (xm <= 31) ? xm : 0
+   *   lsl  xd, xn, tmp ; cmp xm, #31 ; csinv xd, xd, xzr, LS -> xd &= (xm <= 31) ? ~0 : 0
+   */
+  /**
+   * `LSLV`/`LSRV`/`ASRV` shift `rn` by the low 6 (or 5) bits of `rm`. That modulo behaviour is what
+   * the guest's IR and WebAssembly do, so a large count wraps instead of saturating or producing
+   * zero. Uses x16 as the scratch register that holds the masked count.
+   */
+  shiftReg(rd: number, rn: number, op: "lsl" | "lsr" | "asr", rm: number, sf = true): this {
+    // x16 = rm & (63 | 31): the count is used modulo the register width.
+    this.andMask(16, rm, sf ? 63n : 31n, 0, sf);
+    if (op === "lsl") this.lslReg(rd, rn, 16, sf);
+    else if (op === "lsr") this.lsrReg(rd, rn, 16, sf);
+    else this.asrReg(rd, rn, 16, sf);
+    return this;
+  }
+
   rev16(rd: number, rn: number, sf = false): this {
     return this.word((sf ? 0xdac00400 : 0x5ac00400) | (reg(rn) << 5) | reg(rd));
   }
@@ -606,6 +687,18 @@ export class Assembler {
   fneg(sf64: boolean, rd: number, rn: number): this { return this.fp1(sf64, 0x1e214000, 0, rd, rn); }
   fsqrt(sf64: boolean, rd: number, rn: number): this { return this.fp1(sf64, 0x1e21c000, 0, rd, rn); }
 
+  /** Materialise the canonical quiet NaN (what WebAssembly and the interpreter produce). */
+  emitNaN(sf64: boolean, rd: number): this {
+    this.movConst(16, sf64 ? 0x7ff8000000000000n : 0x7fc00000n);
+    return this.fmovFromGpr(sf64, rd, 16);
+  }
+
+  /** Materialise +0.0 or -0.0 into a D/S register. */
+  fmovImm(sf64: boolean, rd: number, negative: boolean): this {
+    this.movConst(16, negative ? (sf64 ? 0x8000000000000000n : 0x80000000n) : 0n);
+    return this.fmovFromGpr(sf64, rd, 16);
+  }
+
   /** FRINTN 8, FRINTP 9, FRINTM 10, FRINTZ 11, FRINTA 12. */
   frint(sf64: boolean, rd: number, rn: number, mode: "n" | "p" | "m" | "z" | "a"): this {
     const opcode = { n: 8, p: 9, m: 10, z: 11, a: 12 }[mode];
@@ -647,21 +740,27 @@ export class Assembler {
   }
 
   /** LDR/STR of a scalar FP register (`ldr d0, [x1, #8]`). */
-  fldr(sz: 4 | 8, rt: number, rn: number, off: number): this {
+  fldrScalar(sz: 4 | 8, rt: number, rn: number, off: number): this {
     const scale = sz === 8 ? 3 : 2;
     if (off < 0 || off % sz || (off >> scale) >= 4096) throw new Error(`fp load offset out of range: ${off}`);
     return this.word((sz === 8 ? 0xfd400000 : 0xbd400000) | ((off >> scale) << 10) | (reg(rn) << 5) | reg(rt));
   }
 
-  fstr(sz: 4 | 8, rt: number, rn: number, off: number): this {
+  fstrScalar(sz: 4 | 8, rt: number, rn: number, off: number): this {
     const scale = sz === 8 ? 3 : 2;
     if (off < 0 || off % sz || (off >> scale) >= 4096) throw new Error(`fp store offset out of range: ${off}`);
     return this.word((sz === 8 ? 0xfd000000 : 0xbd000000) | ((off >> scale) << 10) | (reg(rn) << 5) | reg(rt));
   }
 
-  ldurd(rt: number, rn: number, off: number): this {
+  /** `ldur d0, [x9, #-8]` — unscaled (byte) offset, -256..255. */
+  ldurScalar(rt: number, rn: number, off: number): this {
     if (off < -256 || off > 255) throw new Error("fp ldur offset out of range");
     return this.word(0xfc400000 | ((off & 0x1ff) << 12) | (reg(rn) << 5) | reg(rt));
+  }
+
+  /** Unscaled double load (`ldur d0, [x9, #-8]`); alias of `ldurScalar` for 8-byte accesses. */
+  ldurd(rt: number, rn: number, off: number): this {
+    return this.ldurScalar(rt, rn, off);
   }
 
   /** `ldr d0, [x9, w10, uxtw]` — byte offset in a register. */
