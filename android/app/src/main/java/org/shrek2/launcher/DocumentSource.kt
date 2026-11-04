@@ -5,7 +5,6 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import java.io.InputStream
 import org.shrek2.launcher.install.ByteSource
-import org.shrek2.launcher.install.checkRange
 
 /**
  * A `content://` document read in windows, without copying it anywhere first.
@@ -25,11 +24,45 @@ open class DocumentSource(
   private val window: Int = DEFAULT_WINDOW,
 ) : ByteSource {
 
-  override val size: Long = runCatching {
+  /** What the provider claims. Zero means it will not say -- see [measure]. */
+  private val declaredSize: Long = runCatching {
     resolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
       if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else 0L
     } ?: 0L
   }.getOrDefault(0L)
+
+  private var measured = -1L
+
+  /**
+   * The length of the document. A provider is allowed not to know it (`SIZE` is optional), and an archive
+   * reader needs it: a zip is found by its end record and a tar by its blocks. When the query comes back
+   * empty the file is measured once by reading it through -- one pass, no copy, and only for providers
+   * that will not answer the question.
+   */
+  override val size: Long
+    get() {
+      if (declaredSize > 0) return declaredSize
+      if (measured < 0) measured = measure()
+      return measured
+    }
+
+  private fun measure(): Long = synchronized(this) {
+    val input = resolver.openInputStream(uri)
+    if (input == null) {
+      0L
+    } else {
+      input.use { stream ->
+        val buffer = ByteArray(window)
+        var total = 0L
+        while (true) {
+          val n = stream.read(buffer, 0, buffer.size)
+          if (n <= 0) break
+          total += n
+        }
+        total
+      }
+    }
+  }
 
   /** The display name, for messages: "disc.iso", "game.tar.gz". */
   val name: String = runCatching {
@@ -41,12 +74,19 @@ open class DocumentSource(
   private var windowAt = 0L
   private var windowBytes = ByteArray(0)
 
+  /**
+   * Read [length] bytes at [offset]. The message is written for a player and says what to do; it never
+   * mentions a disc, because this source also serves an archive, and never leaks a bounds failure.
+   */
   @Synchronized
-  override fun read(offset: Long, length: Int): ByteArray = readChecked(offset, length, { checkRange(it, length.toLong(), size) })
-
-  /** Read without the disc-specific wording in the message: an archive is not a disc image. */
-  private fun readChecked(offset: Long, length: Int, check: (Long) -> Unit): ByteArray {
-    check(offset)
+  override fun read(offset: Long, length: Int): ByteArray {
+    if (offset < 0 || length < 0 || offset + length > size) {
+      throw DiscException(
+        "\"$name\" is shorter than it should be: reading it stopped at byte $size of ${offset + length}. " +
+          "If it is on a cloud drive, download it to the device first; otherwise copy the file again, " +
+          "completely, and retry",
+      )
+    }
     val out = ByteArray(length)
     var done = 0
     while (done < length) {

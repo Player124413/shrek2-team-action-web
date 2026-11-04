@@ -121,6 +121,8 @@ open class ContentResolver {
   var document: ByteArray? = null
   /** When set, the provider refuses to return bytes past this offset -- a download that stops early. */
   var stopsAfter: Long = -1
+  /** `OpenableColumns.SIZE` is optional: some providers answer the query with nothing at all. */
+  var reportsSize: Boolean = true
   open fun openInputStream(uri: android.net.Uri): java.io.InputStream? {
     val bytes = document ?: return null
     return object : java.io.InputStream() {
@@ -447,6 +449,7 @@ object StubResolver : android.content.ContentResolver() {
     args: Array<String>?,
     sort: String?,
   ): android.database.Cursor? {
+    if (!reportsSize) return null
     val size = document?.size?.toLong() ?: return null
     return object : android.database.Cursor {
       var first = true
@@ -677,6 +680,43 @@ fun main(args: Array<String>) {
       val problem = ctx.installArchiveForTest(android.net.Uri.parse("content://test/game.tar.gz"))
       check(problem == null) { "the tar.gz install failed: $problem" }
       check(File(target, "install/Game/Shrek 2.exe").isFile) { "no game after the tar.gz install" }
+    }
+
+    step("a provider that does not report the size still unpacks") {
+      // `OpenableColumns.SIZE` is optional, and some providers (a few cloud and USB ones) answer nothing.
+      // The archive reader needs the length -- a zip is found by its end record -- so the source has to
+      // measure the document itself instead of pretending it is empty.
+      val target = File(root, "archive-nosize").apply { deleteRecursively(); mkdirs() }
+      val ctx = LauncherActivity()
+      ctx.rootDir = target
+      ctx.onCreate(null)
+      StubResolver.document = File(archives, "game.zip").readBytes()
+      StubResolver.stopsAfter = -1
+      StubResolver.reportsSize = false
+      try {
+        val problem = ctx.installArchiveForTest(android.net.Uri.parse("content://test/game.zip"))
+        check(problem == null) { "the zip without a reported size failed: $problem" }
+        check(File(target, "install/Game/Shrek 2.exe").isFile) { "no game after the unreported-size install" }
+      } finally {
+        StubResolver.reportsSize = true
+      }
+    }
+
+    step("a half-copied archive is refused by name, not with a crash") {
+      val target = File(root, "archive-cut").apply { deleteRecursively(); mkdirs() }
+      val ctx = LauncherActivity()
+      ctx.rootDir = target
+      ctx.onCreate(null)
+      val whole = File(archives, "game.zip").readBytes()
+      StubResolver.document = whole.copyOf(whole.size / 2)
+      StubResolver.stopsAfter = -1
+      val message = ctx.installArchiveForTest(android.net.Uri.parse("content://test/game.zip"))
+        ?: throw IllegalStateException("half a zip was accepted")
+      println("     reported: ${message.take(120)}")
+      check(message.contains("incomplete") || message.contains("damaged") || message.contains("shorter")) {
+        "unclear message: $message"
+      }
+      check(!message.contains("Exception")) { "raw exception text: $message" }
     }
 
     step("an archive without the game is refused, and says what it wanted") {

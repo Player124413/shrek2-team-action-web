@@ -167,6 +167,11 @@ Two things about that code are easy to get wrong, and both were bugs here first:
 * **A directory entry is not a prefix to remember.** Many zip writers list files only, never the folder
   above `Game/`, so the prefix is stripped per entry, from the entry's own name.
 
+`DocumentSource` also has to cope with a provider that will not answer `OpenableColumns.SIZE` (that column
+is optional, and some cloud and USB providers return nothing): an archive reader needs the length, so the
+document is measured once by reading through it, and a read past the end is reported as "shorter than it
+should be" rather than as a bounds failure.
+
 `tools/game-archive.mjs` builds the fixtures for the check (`game.zip` deflated, `game.tar.gz`,
 `game.tar`, and a zip without the game), and `tools/installer-test.sh` passes them to the launcher harness,
 which unpacks each one through the activity and requires `install/Game/Shrek 2.exe` to appear. Reverting
