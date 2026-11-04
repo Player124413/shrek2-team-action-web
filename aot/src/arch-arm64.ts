@@ -29,9 +29,14 @@ const FP = 29;
 const CPU = 28;
 /** Guest registers kept resident across the whole function (all callee-saved). */
 const PINNED: Record<string, number> = {
-  eax: 19, ecx: 20, edx: 21, ebx: 22, edi: 23, esi: 24, ebp: 25, esp: 26, ftop: 27, df: 17,
+  eax: 19, ecx: 20, edx: 21, ebx: 22, edi: 23, esi: 24, ebp: 25, esp: 26, ftop: 27, df: 15,
 };
-const PINNED_EXTRA: Record<string, number> = { fprA: 15, fprB: 16 };
+/**
+ * Registers the emitters use as scratch and must never hold live state:
+ * x16 is the address of every import/guest call (and of a jump table),
+ * x17 and x18 are used by the switch sequence, x28 is the Cpu pointer, x29 the frame pointer.
+ */
+const PINNED_EXTRA: Record<string, number> = {};
 /**
  * Register pool for expression values, allocated as a stack (level k). Two ranges, so that
  * argument staging for a runtime call can never collide with an address register of the
@@ -211,6 +216,7 @@ export class Arm64FunctionEmitter {
     }
   }
 
+  /** Bytes of stack to allocate: the spill slots plus the saved frame pointer and link register. */
   private frameSize(): number {
     return (this.frame + 16 + 15) & ~15;
   }
@@ -1015,7 +1021,10 @@ export class Arm64FunctionEmitter {
         return;
       }
       case "cpuset": {
+        // The index expression is evaluated into a register *before* the value, matching the order
+        // the reference interpreter uses, and it must not be released until the store is done.
         const { base, off, used } = this.cpuAddress(s.field, s.index);
+        const indexRegs = used ? 1 : 0;
         if (s.v.ty === "f64") {
           const fd = this.dp();
           this.intoFloat(s.v, fd);
@@ -1029,7 +1038,7 @@ export class Arm64FunctionEmitter {
           if (s.field === "esp") this.espDirty = true;
           this.xfree();
         }
-        if (used) this.xfree();
+        this.xfree(indexRegs);
         return;
       }
       case "syncout":
@@ -1039,8 +1048,13 @@ export class Arm64FunctionEmitter {
         this.syncIn();
         return;
       case "callguest":
+        // Register state crosses the boundary through the Cpu struct: the callee loads it on entry
+        // and stores it on exit, so the registers have to be published before the call and picked
+        // back up afterwards. This is what the reference interpreter and the C++ runtime do.
+        this.syncOut();
         this.a.mov(0, CPU);
         this.emitGuestCall(s.target);
+        this.syncIn();
         return;
       case "callind": {
         const target = this.xp();
@@ -1053,11 +1067,16 @@ export class Arm64FunctionEmitter {
         return;
       }
       case "callhle":
+        // The HLE procedure is a C++ function: it reads the guest registers from the Cpu struct and
+        // may modify them, so state crosses the boundary in the struct in both directions.
+        this.syncOut();
         this.a.mov(0, CPU);
         this.a.movConst32(1, s.slot);
         this.emitImport(0);
+        this.syncIn();
         return;
       case "helper": {
+        // Helpers take the Cpu pointer explicitly and may change it, hence the read-back.
         const sig = SIGNATURES[s.fn];
         if (!sig) throw new Error(`${this.f.name}: unknown helper ${s.fn}`);
         // The Cpu pointer is always the first argument of these helpers.
@@ -1075,6 +1094,7 @@ export class Arm64FunctionEmitter {
         if (idx < 0) throw new Error(`${this.f.name}: unknown helper ${s.fn}`);
         this.emitImport(idx);
         this.unstage();
+        this.syncIn();
         return;
       }
       case "trap":
@@ -1173,11 +1193,13 @@ export class Arm64FunctionEmitter {
         this.epilogue();
         return;
       case "tail":
+        this.syncOut();
         this.a.mov(0, CPU);
         this.emitGuestCall(t.target);
         this.epilogue();
         return;
       case "tailind": {
+        this.syncOut();
         const target = this.xp();
         this.into(t.target, target);
         this.a.mov(0, CPU);
@@ -1188,6 +1210,7 @@ export class Arm64FunctionEmitter {
         return;
       }
       case "tailhle":
+        this.syncOut();
         this.a.mov(0, CPU);
         this.a.movConst32(1, t.slot);
         this.emitImport(0);

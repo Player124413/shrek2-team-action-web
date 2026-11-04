@@ -199,6 +199,8 @@ export class Assembler {
   switchTableAbs(index: number, labels: string[]): void {
     const table = this.fresh("jt");
     const skip = this.fresh("js");
+    // x16/x17/x18 are the architectural scratch registers this sequence needs; the code generator
+    // must not keep anything live in them across a switch.
     this.adr(16, table);
     this.shiftImm(17, index, "lsl", 3, false);
     this.ldrReg(8, 18, 16, 17, 2);

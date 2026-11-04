@@ -513,9 +513,14 @@ function execStmt(m: Machine, c: number, s: Stmt, l: Map<string, Val>): void {
       syncIn(m, c, l);
       return;
     case "helper": {
+      // Side-effecting runtime helper: like the HLE path, it sees the published registers and may
+      // change the whole Cpu struct, so the state in both directions goes through the struct.
       const args = s.args.map((a) => evalExpr(m, c, a, l));
+      const before = m.host.record ? new Uint8Array(m.host.mem) : null;
+      syncOut(m, c, l);
       sideEffect(m, c, s.fn, args);
       syncIn(m, c, l);
+      if (before && m.host.record) m.host.record(s.fn, before, new Uint8Array(m.host.mem), null);
       return;
     }
     case "trap": m.host.trap(-1); return;
