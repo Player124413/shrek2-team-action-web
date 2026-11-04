@@ -96,6 +96,8 @@ jobs:
     needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      built: ${{ steps.exe.outputs.found }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -124,9 +126,13 @@ jobs:
       - name: Build and check the image
         if: steps.exe.outputs.found == 'true'
         run: |
-          meta="$(ls metadata/*.json | head -1)"
-          node aot/cli.ts image "work/reference/Shrek 2.exe" --meta "$meta" --out work/aot
+          # The metadata describes the executable; it is optional for the compiler but makes the HLE
+          # export table exact, so pass it when the checkout has one.
+          meta=""
+          if ls metadata/*.json >/dev/null 2>&1; then meta="$(ls metadata/*.json | head -1)"; fi
+          node aot/cli.ts image "work/reference/Shrek 2.exe" ${meta:+--meta "$meta"} --out work/aot
           node aot/cli.ts check work/aot
+          du -h work/aot/game.sk2a
 
       - uses: actions/upload-artifact@v4
         if: steps.exe.outputs.found == 'true'
@@ -229,7 +235,9 @@ jobs:
           echo "keystore=$RUNNER_TEMP/keys/release.jks" >> "$GITHUB_OUTPUT"
 
       - name: AOT image artifact
-        if: needs.image.result == 'success'
+        # Only when the image job actually built one: without a reference executable there is no
+        # artifact, and downloading it would fail the job instead of producing an APK without it.
+        if: needs.image.outputs.built == 'true'
         uses: actions/download-artifact@v4
         with:
           name: aot-image
