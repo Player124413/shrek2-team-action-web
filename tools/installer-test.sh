@@ -39,8 +39,11 @@ fi
 
 echo "== kotlin: compiling the installer =="
 SRC="$ROOT/android/app/src/main/java/org/shrek2/launcher/install"
+# The install package is Android-free but not self-contained: the error types it throws live next to the
+# activity (they are what the screen shows the player), so they are compiled in as well.
+ERRORS="$ROOT/android/app/src/main/java/org/shrek2/launcher/Errors.kt"
 # shellcheck disable=SC2086
-"$KOTLINC" -nowarn -d "$OUT/installer.jar" "$SRC"/*.kt 2>&1 |
+"$KOTLINC" -nowarn -d "$OUT/installer.jar" "$SRC"/*.kt "$ERRORS" 2>&1 |
   grep -vE '^(warning|WARNING):' || true
 [ -f "$OUT/installer.jar" ] || { echo "the Kotlin installer does not compile" >&2; exit 1; }
 
@@ -57,6 +60,12 @@ node "$ROOT/tools/pack-game.mjs" --from-dir "$OUT/install" --out "$OUT/assets"
 [ -f "$OUT/assets/game/stamp.txt" ] || { echo "the packer wrote no stamp" >&2; exit 1; }
 echo "ok: packaged $(grep -c . "$OUT/assets/game/index.txt") files, stamp $(cat "$OUT/assets/game/stamp.txt")"
 
+echo "== packer: the archive fixtures for the 'already installed' path =="
+# A player who already has the game does not have a disc: they hand the launcher a zip of the installed
+# folder. The fixtures are built here (deflate, gzip and plain tar) so the launcher harness unpacks real
+# bytes in CI, not whatever happens to be in someone's /tmp.
+node "$ROOT/tools/game-archive.mjs" --out "$OUT/archives"
+
 echo "== launcher: installing the corpus from a content:// document =="
 # The same image, but through the screen a player uses: the launcher must read it out of the document it
 # was given (not copy it first -- a silent short copy of a 548 MB disc is what broke a real install) and
@@ -64,6 +73,7 @@ echo "== launcher: installing the corpus from a content:// document =="
 # The launcher harness also unpacks the packaged game, which is the flow a player gets: install the APK,
 # open it, play.
 SHREK2_HARNESS_ISO="$OUT/shrek2.iso" SHREK2_HARNESS_ASSETS="$OUT/assets" \
+  SHREK2_HARNESS_ARCHIVES="$OUT/archives" \
   KOTLINC="$KOTLINC" "$ROOT/tools/android-stubs-runtime.sh"
 
 echo "ok: the disc installer works in both implementations"

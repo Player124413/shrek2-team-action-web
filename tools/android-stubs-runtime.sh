@@ -36,7 +36,7 @@ out = sys.argv[1]
 strings = {}
 for path in glob.glob("android/app/src/main/res/values/*.xml"):
     for m in re.finditer(r'<string name="([^"]+)">(.*?)</string>', open(path).read(), re.S):
-        text = m.group(2).replace("\\'", "'").replace("\\n", "\n").replace("&amp;", "&")
+        text = m.group(2).replace("\\'", "'").replace('\\"', '"').replace("\\n", "\n").replace("&amp;", "&")
         strings[m.group(1)] = text
 with open(out + "/runtime/R.kt", "w") as f:
     f.write("package org.shrek2.launcher\n\nobject R {\n  object string {\n")
@@ -647,6 +647,51 @@ fun main(args: Array<String>) {
     }
   }
 
+  // 6. The other way in: a ready-made installed copy, zipped by the player. The archive is unpacked out of
+  //    a `content://` document (nothing copied first), the game is found inside it however it was packed
+  //    (a top-level folder, Windows junk, `\` separators), and a wrong file is refused with a sentence.
+  val archives = args.getOrNull(2)?.takeIf { it.isNotEmpty() }?.let { File(it) }
+  if (archives == null || !archives.isDirectory) {
+    println("SKIP  the installed-game archive (no archive directory given)")
+  } else {
+    step("a zip of the installed game is unpacked from the document") {
+      val target = File(root, "archive").apply { deleteRecursively(); mkdirs() }
+      val ctx = LauncherActivity()
+      ctx.rootDir = target
+      StubAssets.root = null
+      ctx.onCreate(null)
+      StubResolver.document = File(archives, "game.zip").readBytes()
+      StubResolver.stopsAfter = -1
+      val problem = ctx.installArchiveForTest(android.net.Uri.parse("content://test/game.zip"))
+      check(problem == null) { "the zip install failed: $problem" }
+      check(File(target, "install/Game/Shrek 2.exe").isFile) { "no game after the zip install" }
+      check(File(target, "install/Game/Chars/ogre.tex").isFile) { "the zip lost the game data" }
+    }
+
+    step("a tar.gz of the same game is unpacked too") {
+      val target = File(root, "archive-tgz").apply { deleteRecursively(); mkdirs() }
+      val ctx = LauncherActivity()
+      ctx.rootDir = target
+      ctx.onCreate(null)
+      StubResolver.document = File(archives, "game.tar.gz").readBytes()
+      val problem = ctx.installArchiveForTest(android.net.Uri.parse("content://test/game.tar.gz"))
+      check(problem == null) { "the tar.gz install failed: $problem" }
+      check(File(target, "install/Game/Shrek 2.exe").isFile) { "no game after the tar.gz install" }
+    }
+
+    step("an archive without the game is refused, and says what it wanted") {
+      val target = File(root, "archive-bad").apply { deleteRecursively(); mkdirs() }
+      val ctx = LauncherActivity()
+      ctx.rootDir = target
+      ctx.onCreate(null)
+      StubResolver.document = File(archives, "not-a-game.zip").readBytes()
+      val message = ctx.installArchiveForTest(android.net.Uri.parse("content://test/not-a-game.zip"))
+        ?: throw IllegalStateException("a zip without the game was accepted")
+      println("     reported: ${message.take(120)}")
+      check(message.contains("Game/Shrek 2.exe") || message.contains("does not contain the game")) { "unclear message: $message" }
+    }
+  }
+
   println(if (failures == 0) "ok: the launcher starts and works (no crash paths found)" else "FAILED ($failures problems)")
   if (failures != 0) kotlin.system.exitProcess(1)
 }
@@ -655,7 +700,9 @@ HARNESS
 SOURCES=$(find android/app/src/main/java/org/shrek2/launcher/install -name '*.kt' | sort)
 SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/LauncherActivity.kt"
 SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/Settings.kt"
-SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/ContentSource.kt"
+SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/DocumentSource.kt"
+SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/ArchiveUnpacker.kt"
+SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/Errors.kt"
 SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/BundledGame.kt"
 SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/Registry.kt"
 # `InstallFiles.kt` is left out on purpose: it is a JNI facade (`System.loadLibrary`), replaced by the
@@ -674,4 +721,4 @@ STDLIB="$(dirname "$(readlink -f "$KOTLINC")")/../lib/kotlin-stdlib.jar"
 # argument order stays readable. (`"$@"` is the script's own arguments -- `--keep` included -- so it is not
 # forwarded; the harness reads only what is passed here.)
 java -Dshrek2.root="${SHREK2_HARNESS_ROOT:-/tmp/shrek2-launcher-check}" \
-  -cp "$OUT/launcher.jar${STDLIB:+:$STDLIB}" HarnessKt "${SHREK2_HARNESS_ISO:-}" "${SHREK2_HARNESS_ASSETS:-}"
+  -cp "$OUT/launcher.jar${STDLIB:+:$STDLIB}" HarnessKt "${SHREK2_HARNESS_ISO:-}" "${SHREK2_HARNESS_ASSETS:-}" "${SHREK2_HARNESS_ARCHIVES:-}"

@@ -258,7 +258,9 @@ PY
 SOURCES=$(find android/app/src/main/java/org/shrek2/launcher/install -name '*.kt' | sort)
 SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/LauncherActivity.kt"
 SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/Settings.kt"
-SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/ContentSource.kt"
+SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/DocumentSource.kt"
+SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/ArchiveUnpacker.kt"
+SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/Errors.kt"
 SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/BundledGame.kt"
 SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/Registry.kt"
 SOURCES="$SOURCES android/app/src/main/java/org/shrek2/launcher/InstallFiles.kt"

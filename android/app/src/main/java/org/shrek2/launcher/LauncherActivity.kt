@@ -38,6 +38,7 @@ class LauncherActivity : AppCompatActivity() {
 
   private lateinit var status: TextView
   private lateinit var install: Button
+  private lateinit var installArchive: Button
   private lateinit var play: Button
   private lateinit var settingsBox: LinearLayout
   private lateinit var progress: ProgressBar
@@ -64,6 +65,11 @@ class LauncherActivity : AppCompatActivity() {
     install = Button(this).apply {
       text = getString(R.string.install_title)
       setOnClickListener { pickDisc() }
+    }
+    // The path most players have: a copy of the game they already installed, zipped.
+    installArchive = Button(this).apply {
+      text = getString(R.string.install_archive_title)
+      setOnClickListener { pickArchive() }
     }
     play = Button(this).apply {
       text = getString(R.string.play)
@@ -129,6 +135,7 @@ class LauncherActivity : AppCompatActivity() {
       addView(progress, matchWidth(top = 16))
       addView(progressText, matchWidth(top = 4))
       addView(install, matchWidth(top = 24))
+      addView(installArchive, matchWidth(top = 8))
       addView(play, matchWidth(top = 12))
       addView(settingsBox)
     }
@@ -208,6 +215,7 @@ class LauncherActivity : AppCompatActivity() {
     // With the game inside the APK there is nothing to install: the disc path stays available, but as a
     // secondary option, because a player who owns a disc should still be able to use it.
     install.visibility = if (installed && bundled) View.GONE else View.VISIBLE
+    installArchive.visibility = install.visibility
     status.text = when {
       !installed && bundled -> getString(R.string.status_unpacking)
       !installed -> getString(R.string.status_not_installed)
@@ -261,13 +269,38 @@ class LauncherActivity : AppCompatActivity() {
     startActivityForResult(Intent.createChooser(intent, getString(R.string.install_title)), REQUEST_DOCUMENT)
   }
 
+  /**
+   * Pick a `zip`/`tar`/`tar.gz` of an installed copy of the game and unpack it.
+   *
+   * `application/*` plus the common archive types, but `*/*` is included because many file managers report a
+   * `.tar.gz` as octet-stream; the format is sniffed from the bytes anyway, so the picker cannot get it
+   * wrong -- only the player can, and then the message says what the file actually looks like.
+   */
+  private fun pickArchive() {
+    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+      addCategory(Intent.CATEGORY_OPENABLE)
+      type = "*/*"
+      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      putExtra(
+        Intent.EXTRA_MIME_TYPES,
+        arrayOf("application/zip", "application/x-zip-compressed", "application/gzip", "application/x-gzip", "application/x-tar"),
+      )
+      putExtra(Intent.EXTRA_TITLE, getString(R.string.pick_archive))
+    }
+    @Suppress("DEPRECATION")
+    startActivityForResult(Intent.createChooser(intent, getString(R.string.install_archive_title)), REQUEST_ARCHIVE)
+  }
+
   @Deprecated("document URI result")
   override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
     super.onActivityResult(requestCode, resultCode, data)
-    if (requestCode != REQUEST_DOCUMENT || resultCode != Activity.RESULT_OK) return
+    if (resultCode != Activity.RESULT_OK) return
     val uri = data?.data ?: return
     runCatching { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-    installDisc(uri)
+    when (requestCode) {
+      REQUEST_DOCUMENT -> installDisc(uri)
+      REQUEST_ARCHIVE -> installArchive(uri)
+    }
   }
 
   /**
@@ -297,7 +330,7 @@ class LauncherActivity : AppCompatActivity() {
   private fun installFrom(uri: Uri, onDone: (String?) -> Unit) {
     var failure: String? = null
     var summary: String? = null
-    val source = ContentSource(contentResolver, uri)
+    val source = DocumentSource(contentResolver, uri)
     try {
       val root = InstallFiles.installDir(this)
       root.mkdirs()
@@ -344,6 +377,80 @@ class LauncherActivity : AppCompatActivity() {
     }
   }
 
+  /**
+   * Unpack an installed copy of the game from the archive the player picked, straight out of the document.
+   *
+   * The archive is read where it is ([DocumentSource]), so a 500 MB zip starts unpacking immediately and
+   * needs no cache space. Afterwards the same finishing steps as a disc install run: the directory layout
+   * is the one the game expects, and the registry gets its first-run values.
+   */
+  private fun installArchive(uri: Uri) {
+    installing = true
+    install.isEnabled = false
+    installArchive.isEnabled = false
+    progress.visibility = View.VISIBLE
+    progress.progress = 0
+    progressText.visibility = View.VISIBLE
+    progressText.text = getString(R.string.install_unpacking_archive)
+
+    Thread {
+      unpackArchive(uri) { failure ->
+        main {
+          installing = false
+          install.isEnabled = true
+          installArchive.isEnabled = true
+          progress.visibility = View.GONE
+          if (failure != null) progressText.text = getString(R.string.install_failed, failure)
+          refresh()
+        }
+      }
+    }.start()
+  }
+
+  /** The archive install itself; [onDone] receives the error message, or null. */
+  private fun unpackArchive(uri: Uri, onDone: (String?) -> Unit) {
+      var failure: String? = null
+      var summary: String? = null
+      val source = DocumentSource(contentResolver, uri)
+      try {
+        val root = InstallFiles.installDir(this)
+        root.mkdirs()
+        val result = ArchiveUnpacker.unpack(source, DirSink(root)) { done, total, name ->
+          val percent = if (total > 0) done * 100 / total else 0
+          main {
+            progress.progress = percent
+            progressText.text = getString(R.string.install_unpacking_file, name)
+          }
+        }
+        if (!InstallFiles.installed(this)) {
+          throw DiscException(
+            getString(R.string.install_no_game_in_archive, source.name),
+          )
+        }
+        // The archive is the player's own copy of an installed game: its settings are not in it, so the
+        // first-run values (and the controller GUIDs) are written here, exactly like after a disc install.
+        InstallFiles.prepare(this)
+        loadGraphics()
+        summary = getString(R.string.install_archive_done, result.files, result.bytes / 1048576, result.format)
+      } catch (e: Exception) {
+        failure = e.message ?: e.toString()
+      } finally {
+        source.close()
+      }
+      onDone(failure)
+      if (failure == null) {
+        val done = summary ?: getString(R.string.install_done)
+        main { progressText.text = done }
+      }
+  }
+
+  /** Synchronous variant of [installArchive] for the JVM harness: returns the error message, or null. */
+  internal fun installArchiveForTest(uri: Uri): String? {
+    var error: String? = null
+    unpackArchive(uri) { error = it }
+    return error
+  }
+
   private fun main(block: () -> Unit) = runOnUiThread(block)
 
   /**
@@ -363,6 +470,7 @@ class LauncherActivity : AppCompatActivity() {
 
   private companion object {
     const val REQUEST_DOCUMENT = 1
+    const val REQUEST_ARCHIVE = 2
     const val RESOLUTION_BUTTON_ID = 0x7f000001
     const val DISTANCE_ID = 0x7f000002
   }

@@ -1,9 +1,9 @@
-package org.shrek2.launcher.install
+package org.shrek2.launcher
 
 import java.io.IOException
 
 /**
- * The installer's error types.
+ * The launcher's and the installer's error types.
  *
  * A disc can be wrong in ways the player can act on -- a truncated image, a damaged file, a disc that is
  * not the game -- and the launcher has to say which. A raw bounds failure ("read [x, +y) outside source

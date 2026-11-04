@@ -144,11 +144,40 @@ The game is **never** committed: `android/app/src/main/assets/game/` is git-igno
 it is built by whoever owns the game. Without either secret the APK simply has no game and the launcher
 falls back to the disc-image install below.
 
+## Installing from an archive of an installed copy
+
+The other way in, for a player who already has the game installed somewhere (a PC, a phone, a backup):
+pick a **zip / tar / tar.gz of the installed folder** -- the one that holds `Game/`, with
+`Game/Shrek 2.exe` inside it. No disc is needed and nothing is typed in.
+
+| What happens | Where |
+| --- | --- |
+| the file is read straight out of the `content://` document, by offset | `DocumentSource.kt` |
+| the format is sniffed from the first bytes -- `PK\x03\x04` zip, `1f 8b` gzip (`tar.gz`), otherwise tar | `ArchiveUnpacker.unpack` |
+| zip: the central directory is walked, each entry inflated; tar: `ustar` headers, `L`/`x` long names | `ArchiveUnpacker` |
+| the folder above `Game/` is stripped, so `Shrek 2 Team Action/Game/...` lands as `Game/...` | `ArchiveUnpacker.stripToGame` |
+| `Thumbs.db`, `desktop.ini`, `._*`, `__MACOSX` and folder entries are skipped | `ArchiveUnpacker.isJunk` |
+| an archive with no `Game/Shrek 2.exe` is refused and says what to zip instead | `install_no_game_in_archive` |
+
+Two things about that code are easy to get wrong, and both were bugs here first:
+
+* **Method 8 is raw deflate.** A zip stores the deflate stream *without* a zlib header, so the reader has to
+  use `Inflater(true)` ("nowrap"). The default expects the wrapper and dies on the first byte with
+  *"incorrect header check"* -- which is exactly what every archive from Windows, 7-Zip or Python produced.
+* **A directory entry is not a prefix to remember.** Many zip writers list files only, never the folder
+  above `Game/`, so the prefix is stripped per entry, from the entry's own name.
+
+`tools/game-archive.mjs` builds the fixtures for the check (`game.zip` deflated, `game.tar.gz`,
+`game.tar`, and a zip without the game), and `tools/installer-test.sh` passes them to the launcher harness,
+which unpacks each one through the activity and requires `install/Game/Shrek 2.exe` to appear. Reverting
+either fix above makes that stage fail.
+
 ## Installing from a disc image
 
 "Install from your own disc" takes the **ISO image** of the retail disc -- not an installed folder, not
-an `.exe`. The launcher streams the image into `noBackupFilesDir/cache/disc.iso` (a `content://`
-document has no positional reads, and the installer needs random access), then reads it directly:
+an `.exe`. The launcher reads the image **in place**, out of the `content://` document it was given
+(`DocumentSource.kt`): a 64 KiB window is fetched per read with `openInputStream` + `skip`. Copying the
+file first is what once turned a 548 MB disc into a 20 MB truncated one, so there is no copy:
 
 | Step | Code |
 | --- | --- |

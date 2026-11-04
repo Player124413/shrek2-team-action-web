@@ -5,7 +5,13 @@
   <string name="install_hint">Choose the ISO image of your own Shrek 2 Team Action disc. The game files are installed from it into the app\'s private storage; the image itself is deleted afterwards and nothing is uploaded anywhere.</string>
   <string name="play">Play</string>
   <string name="pick_disc">Choose the disc image (ISO)</string>
-  <string name="status_not_installed">Shrek 2 Team Action is not installed yet. Choose the ISO image of your own disc and the launcher installs the game files from it.</string>
+  <string name="install_archive_title">Install from your installed game</string>
+  <string name="pick_archive">Choose the archive of the installed game (.zip, .tar, .tar.gz)</string>
+  <string name="install_unpacking_archive">Unpacking your installed game…</string>
+  <string name="install_unpacking_file">Unpacking: %1$s</string>
+  <string name="install_archive_done">Installed %1$d files (%2$d MB) from the %3$s you picked.</string>
+  <string name="install_no_game_in_archive">\"%1$s\" does not contain the game: no Game/Shrek 2.exe was found in it. Zip the folder that holds Game/ (the one with Shrek 2.exe inside Game) and try again.</string>
+  <string name="status_not_installed">Shrek 2 Team Action is not installed yet. Choose the archive of your installed game (.zip/.tar.gz), or the ISO image of your own disc, and the launcher installs from it.</string>
   <string name="status_needs_compile">Game files are installed. Starting the game the first time compiles it for this device (the same translation the desktop site does in the browser); this takes a few minutes and happens once.</string>
   <string name="status_ready">Ready: %1$d MB of native code for this device.</string>
   <string name="settings_graphics">Graphics</string>

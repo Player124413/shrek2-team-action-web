@@ -1,5 +1,9 @@
 package org.shrek2.launcher.install
 
+import org.shrek2.launcher.DiscException
+import org.shrek2.launcher.InstallException
+import org.shrek2.launcher.MemberException
+
 import java.io.IOException
 
 /**
