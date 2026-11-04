@@ -3,69 +3,149 @@ package org.shrek2.launcher
 import android.app.Activity
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
+import android.provider.OpenableColumns
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import org.shrek2.launcher.install.DirSink
+import org.shrek2.launcher.install.FileSource
+import org.shrek2.launcher.install.Installer
 import java.io.File
 
 /**
- * Start-up screen: checks the install, offers the installer, and starts the game.
+ * Start-up screen: installs the game from the player's own disc image and starts it.
  *
- * Everything this screen needs is one directory tree (see [InstallFiles]); there is no network code
- * anywhere in the app, and no game data is shipped inside the APK -- the player supplies their own
- * copy and it never leaves the device.
+ * "Install from your own disc" asks for the *ISO image* of the retail disc and installs the game files
+ * straight out of it (ISO 9660 -> MSI database -> LZX cabinet, see `install/`). No desktop step and no
+ * pre-installed folder: the player picks the image, the launcher writes `Game/...` into app-private
+ * storage. The image is streamed into the cache directory first, because a `content://` document has no
+ * positional reads and the installer needs random access; the copy is deleted as soon as it is done.
+ *
+ * Graphics settings live here too: the original Launcher's resolution and effects switches, written to
+ * the registry file the game reads at start-up. Everything is local — no network code anywhere.
  */
 class LauncherActivity : AppCompatActivity() {
 
   private lateinit var status: TextView
   private lateinit var install: Button
   private lateinit var play: Button
-  private lateinit var compile: ProgressBar
+  private lateinit var settingsBox: LinearLayout
+  private lateinit var progress: ProgressBar
+  private lateinit var progressText: TextView
+
+  private var resolution = 2
+  private val switches = HashMap<Int, CheckBox>() // option bit -> checkbox
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    val g = loadGraphics()
+    resolution = g.resolution
 
     status = TextView(this).apply { textSize = 16f }
+    progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+      max = 100
+      visibility = View.GONE
+    }
+    progressText = TextView(this).apply {
+      textSize = 13f
+      visibility = View.GONE
+    }
     install = Button(this).apply {
       text = getString(R.string.install_title)
       setOnClickListener { pickDisc() }
     }
     play = Button(this).apply {
-      text = "Play"
+      text = getString(R.string.play)
       setOnClickListener { startActivity(Intent(this@LauncherActivity, GameActivity::class.java)) }
     }
-    compile = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-      isIndeterminate = true
-      visibility = android.view.View.GONE
+
+    settingsBox = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      addView(TextView(this@LauncherActivity).apply {
+        text = getString(R.string.settings_graphics)
+        textSize = 20f
+        setPadding(0, 24, 0, 8)
+      })
+      addView(TextView(this@LauncherActivity).apply {
+        text = getString(R.string.settings_resolution)
+        textSize = 14f
+      })
+      addView(Button(this@LauncherActivity).apply {
+        id = RESOLUTION_BUTTON_ID
+        text = Settings.RESOLUTIONS[resolution]
+        setOnClickListener {
+          resolution = (resolution + 1) % Settings.RESOLUTIONS.size
+          text = Settings.RESOLUTIONS[resolution]
+          saveGraphics()
+        }
+      })
+      addOption(g, Settings.OPT_SHADOWS, R.string.settings_shadows)
+      addOption(g, Settings.OPT_ANTIALIAS, R.string.settings_antialiasing)
+      addOption(g, Settings.OPT_CLIPPING, R.string.settings_clipping)
+      addView(TextView(this@LauncherActivity).apply {
+        text = getString(R.string.settings_distance)
+        textSize = 14f
+        setPadding(0, 16, 0, 0)
+      })
+      addView(SeekBar(this@LauncherActivity).apply {
+        id = DISTANCE_ID
+        max = 100
+        progress = g.distance
+        setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+          override fun onProgressChanged(bar: SeekBar, value: Int, fromUser: Boolean) {}
+          override fun onStartTrackingTouch(bar: SeekBar) {}
+          override fun onStopTrackingTouch(bar: SeekBar) = saveGraphics()
+        })
+      })
+      addView(TextView(this@LauncherActivity).apply {
+        text = getString(R.string.settings_hint)
+        textSize = 12f
+        setPadding(0, 24, 0, 0)
+      })
     }
 
-    val layout = LinearLayout(this).apply {
+    val column = LinearLayout(this).apply {
       orientation = LinearLayout.VERTICAL
-      gravity = Gravity.CENTER_VERTICAL
       setPadding(48, 48, 48, 48)
       addView(TextView(this@LauncherActivity).apply {
         text = getString(R.string.app_name)
         textSize = 26f
       })
-      addView(status, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = 24 })
-      addView(install, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = 32 })
-      addView(play, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = 16 })
-      addView(TextView(this@LauncherActivity).apply {
-        text = getString(R.string.install_hint)
-        textSize = 13f
-        setPadding(0, 32, 0, 0)
-      })
-      addView(compile)
+      addView(status, matchWidth(top = 24))
+      addView(progress, matchWidth(top = 16))
+      addView(progressText, matchWidth(top = 4))
+      addView(install, matchWidth(top = 24))
+      addView(play, matchWidth(top = 12))
+      addView(settingsBox)
     }
-    setContentView(layout)
+    setContentView(ScrollView(this).apply { addView(column) })
   }
+
+  private fun addOption(g: Settings.Graphics, bit: Int, label: Int) {
+    val on = g.options() and bit != 0
+    val box = CheckBox(this).apply {
+      text = getString(label)
+      isChecked = on
+      setOnCheckedChangeListener { _, _ -> saveGraphics() }
+    }
+    switches[bit] = box
+    settingsBox.addView(box)
+  }
+
+  private fun matchWidth(top: Int = 0) =
+    LinearLayout.LayoutParams(
+      ViewGroup.LayoutParams.MATCH_PARENT,
+      ViewGroup.LayoutParams.WRAP_CONTENT,
+    ).apply { topMargin = top }
 
   override fun onResume() {
     super.onResume()
@@ -73,87 +153,169 @@ class LauncherActivity : AppCompatActivity() {
   }
 
   private fun refresh() {
+    if (installing) return
     val installed = InstallFiles.installed(this)
     val compiled = InstallFiles.compiled(this)
     play.isEnabled = installed && compiled
-    install.visibility = if (installed) android.view.View.GONE else android.view.View.VISIBLE
+    install.visibility = if (installed) View.GONE else View.VISIBLE
     status.text = when {
-      !installed -> "Shrek 2 Team Action is not installed yet. Choose your own disc image to copy the game files into the app's private storage."
-      !compiled -> "Game files are installed. Starting the game the first time compiles it for this device " +
-        "(the same translation the desktop site does in the browser); this takes a few minutes and happens once."
-      else -> "Ready: ${InstallFiles.imageBytes(this) / 1048576} MB of native code for this device."
+      !installed -> getString(R.string.status_not_installed)
+      !compiled -> getString(R.string.status_needs_compile)
+      else -> getString(R.string.status_ready, InstallFiles.imageBytes(this) / 1048576)
     }
+  }
+
+  // ---- Graphics settings ---------------------------------------------------------------------------
+
+  private fun loadGraphics(): Settings.Graphics {
+    val registry = Registry.load(registryFile())
+    Settings.prepareDefaults(registry)
+    Registry.save(registryFile(), registry)
+    return Settings.read(registry)
+  }
+
+  /** Read every switch back, write the registry, and keep the rest of the file as it was. */
+  private fun saveGraphics() {
+    val registry = Registry.load(registryFile())
+    var options = 0
+    for ((bit, box) in switches) if (box.isChecked) options = options or bit
+    val g = Settings.Graphics(
+      resolution = resolution,
+      shadows = options and Settings.OPT_SHADOWS != 0,
+      antiAliasing = options and Settings.OPT_ANTIALIAS != 0,
+      clipping = options and Settings.OPT_CLIPPING != 0,
+      distance = findViewById<SeekBar>(DISTANCE_ID).progress,
+    )
+    Settings.write(registry, g)
+    Registry.save(registryFile(), registry)
+  }
+
+  private fun registryFile(): File = File(noBackupFilesDir, "registry.txt")
+
+  // ---- Installing from a disc image ----------------------------------------------------------------
+
+  private fun pickDisc() {
+    // ACTION_OPEN_DOCUMENT, not GET_CONTENT: it gives a stable URI and a read grant we can keep for the
+    // length of the install (a multi-hundred-megabyte cabinet read).
+    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+      addCategory(Intent.CATEGORY_OPENABLE)
+      type = "*/*"
+      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      // Most file managers report an ISO as application/octet-stream or octet-stream; the hint helps
+      // the picker put disk images first without hiding anything.
+      putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/octet-stream", "application/x-iso9660-image", "application/x-cd-image"))
+      putExtra(Intent.EXTRA_TITLE, getString(R.string.pick_disc))
+    }
+    @Suppress("DEPRECATION")
+    startActivityForResult(Intent.createChooser(intent, getString(R.string.install_title)), REQUEST_DOCUMENT)
+  }
+
+  @Deprecated("document URI result")
+  override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+    super.onActivityResult(requestCode, resultCode, data)
+    if (requestCode != REQUEST_DOCUMENT || resultCode != Activity.RESULT_OK) return
+    val uri = data?.data ?: return
+    runCatching { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+    installDisc(uri)
   }
 
   /**
-   * The installer needs the game files somewhere it can read. Instead of pulling the ISO parser into
-   * the app, the launcher points the player at the companion tool (`node aot/cli.ts image` after
-   * `installer/src/cli.ts`): on a phone without a desktop this is the "share the installed folder"
-   * path, and on a phone with one it is a single transfer.
+   * Copy the image into the cache directory, then install from it. Both halves run on a worker thread;
+   * the UI thread only sees the progress bar and the final message.
    */
-  private fun pickDisc() {
-    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    }
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-      @Suppress("DEPRECATION")
-      startActivityForResult(intent, REQUEST_TREE)
-    } else {
-      status.text = "This build needs Android 8.0 or newer."
-    }
-  }
+  private fun installDisc(uri: Uri) {
+    installing = true
+    install.isEnabled = false
+    progress.visibility = View.VISIBLE
+    progress.progress = 0
+    progressText.visibility = View.VISIBLE
+    progressText.text = getString(R.string.install_copying)
 
-  @Deprecated("tree URI result")
-  override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-    super.onActivityResult(requestCode, resultCode, data)
-    if (requestCode != REQUEST_TREE || resultCode != Activity.RESULT_OK) return
-    val uri: Uri = data?.data ?: return
-    // Persist the permission so the copy can resume after a restart.
-    runCatching { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-    copyTree(uri)
-  }
-
-  /** Copies an already-installed directory tree into the app's private storage, off the UI thread. */
-  private fun copyTree(uri: Uri) {
-    compile.visibility = android.view.View.VISIBLE
     Thread {
-      val root = noBackupFilesDir.absolutePath
-      var files = 0
-      fun copy(dir: android.net.Uri, rel: String) {
-        contentResolver.openFileDescriptor(dir, "r") // fails for a directory on some providers: ignore
-        val docId = android.provider.DocumentsContract.getTreeDocumentId(dir)
-        val children = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(dir, docId)
-        contentResolver.query(children, null, null, null, null)?.use { cursor ->
-          val idCol = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-          val nameCol = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-          val typeCol = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE)
-          while (cursor.moveToNext()) {
-            val id = cursor.getString(idCol)
-            val name = cursor.getString(nameCol)
-            val childRel = if (rel.isEmpty()) name else "$rel/$name"
-            val child = android.provider.DocumentsContract.buildDocumentUriUsingTree(dir, id)
-            if (cursor.getString(typeCol) == android.provider.DocumentsContract.Document.MIME_TYPE_DIR) {
-              copy(child, childRel)
-            } else {
-              val tmp = File(cacheDir, "incoming")
-              tmp.parentFile?.mkdirs()
-              contentResolver.openInputStream(child)?.use { input -> tmp.outputStream().use { input.copyTo(it) } }
-              if (InstallFiles.copyFile(root, childRel, tmp.absolutePath)) files++
-              tmp.delete()
+      val image = File(cacheDir, "disc.iso")
+      var failure: String? = null
+      try {
+        val total = contentSize(uri)
+        var copied = 0L
+        contentResolver.openInputStream(uri)?.use { input ->
+          image.outputStream().use { out ->
+            val buffer = ByteArray(1 shl 20)
+            while (true) {
+              val n = input.read(buffer)
+              if (n <= 0) break
+              out.write(buffer, 0, n)
+              copied += n
+              if (total > 0) main {
+                progress.progress = (copied * 40 / total).toInt() // the copy is the first 40 %
+                progressText.text = getString(R.string.install_copying_percent, (copied * 100 / total).toInt())
+              }
             }
           }
+        } ?: throw IllegalStateException("cannot open the selected file")
+
+        val root = InstallFiles.installDir(this)
+        root.mkdirs()
+        var summary: String? = null
+        val source = FileSource(image)
+        try {
+          val disc = Installer.openDisc(source)
+          val report = Installer.install(disc, DirSink(root)) { p ->
+            val done = if (p.total > 0) 40 + p.done * 60 / p.total else 40
+            main {
+              progress.progress = done
+              progressText.text = when (p.phase) {
+                Installer.Phase.SCAN -> getString(R.string.install_scanning)
+                else -> getString(R.string.install_writing, p.done, p.total)
+              }
+            }
+          }
+          summary = report.summary()
+          // Files that did not match the disc's own checksums: report them, but keep the install --
+          // the sizes are checked too, so what is there is complete, and the player may still play.
+          if (report.mismatches.isNotEmpty()) {
+            val warnings = getString(R.string.install_warnings, report.mismatches.take(3).joinToString("; "))
+            main { progressText.text = warnings }
+          }
+        } finally {
+          source.close()
         }
+        // The disc's own registry rows describe the Windows install (paths under C:), the game's
+        // settings the launcher writes are the ones that matter here. The install directory and the
+        // cache are created either way, so the game can start as soon as it is compiled.
+        InstallFiles.prepare(this)
+        loadGraphics()
+        val done = summary ?: getString(R.string.install_done)
+        main { progressText.text = done }
+      } catch (e: Exception) {
+        failure = e.message ?: e.toString()
+      } finally {
+        image.delete() // never keep a copy of the player's disc
       }
-      runCatching { copy(uri, "") }
-      runOnUiThread {
-        compile.visibility = android.view.View.GONE
+      main {
+        installing = false
+        install.isEnabled = true
+        progress.visibility = View.GONE
+        if (failure != null) {
+          progressText.text = getString(R.string.install_failed, failure)
+        }
         refresh()
-        status.text = "Copied $files files. ${if (InstallFiles.installed(this)) "" else "The game's executable was not found in that folder."}"
       }
     }.start()
   }
 
+  private fun contentSize(uri: Uri): Long = runCatching {
+    contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
+      if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else 0L
+    } ?: 0L
+  }.getOrDefault(0L)
+
+  private fun main(block: () -> Unit) = runOnUiThread(block)
+
+  private var installing = false
+
   private companion object {
-    const val REQUEST_TREE = 1
+    const val REQUEST_DOCUMENT = 1
+    const val RESOLUTION_BUTTON_ID = 0x7f000001
+    const val DISTANCE_ID = 0x7f000002
   }
 }

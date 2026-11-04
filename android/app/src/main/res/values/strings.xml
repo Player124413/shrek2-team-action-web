@@ -2,5 +2,24 @@
 <resources>
   <string name="app_name">Shrek 2: Team Action</string>
   <string name="install_title">Install from your own disc</string>
-  <string name="install_hint">Choose the Shrek 2 Team Action disc image (.iso) or an installed copy. The game files are copied into the app\'s private storage; nothing is uploaded anywhere.</string>
+  <string name="install_hint">Choose the ISO image of your own Shrek 2 Team Action disc. The game files are installed from it into the app\'s private storage; the image itself is deleted afterwards and nothing is uploaded anywhere.</string>
+  <string name="play">Play</string>
+  <string name="pick_disc">Choose the disc image (ISO)</string>
+  <string name="status_not_installed">Shrek 2 Team Action is not installed yet. Choose the ISO image of your own disc and the launcher installs the game files from it.</string>
+  <string name="status_needs_compile">Game files are installed. Starting the game the first time compiles it for this device (the same translation the desktop site does in the browser); this takes a few minutes and happens once.</string>
+  <string name="status_ready">Ready: %1$d MB of native code for this device.</string>
+  <string name="settings_graphics">Graphics</string>
+  <string name="settings_resolution">Resolution (tap to change)</string>
+  <string name="settings_shadows">Detailed shadows</string>
+  <string name="settings_antialiasing">Anti-aliasing</string>
+  <string name="settings_clipping">Distance clipping</string>
+  <string name="settings_distance">View distance</string>
+  <string name="settings_hint">The game reads these when it starts, so change them while it is not running. Keyboard and gamepad bindings are on the desktop page.</string>
+  <string name="install_copying">Copying the disc image…</string>
+  <string name="install_copying_percent">Copying the disc image: %1$d %%</string>
+  <string name="install_scanning">Reading the disc…</string>
+  <string name="install_writing">Installing: %1$d of %2$d files</string>
+  <string name="install_done">Installed.</string>
+  <string name="install_warnings">Installed, with warnings: %1$s</string>
+  <string name="install_failed">Installation failed: %1$s</string>
 </resources>

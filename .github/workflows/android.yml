@@ -1,19 +1,18 @@
-# Builds the Android APK.
+# Builds the Android debug APK.
 #
-# Four jobs, cheapest first, so a broken change fails in a minute instead of after a half-hour Gradle
+# Three jobs, cheapest first, so a broken change fails in a minute instead of after a half-hour Gradle
 # build:
-#   checks         -- the AOT compiler's four test suites, the ETC2 transcoder, the native syntax check
-#   image          -- the AOT image for the reference executable (only when its hash is known)
-#   apk            -- Gradle + NDK build, signed with the project's release key
-#   release        -- on a tag: attach the APK to a GitHub release, after proving it installs as an
-#                     *update* over the previous one (same package, higher versionCode, same key)
+#   checks  -- the AOT compiler's four test suites, the ETC2 transcoder, the native syntax check, and the
+#              disc installer: the conformance corpus is generated, the TypeScript installer proves it
+#              installs it, and the Kotlin port has to reproduce the same files byte for byte
+#   image   -- the AOT image for the reference executable (only when its hash is known)
+#   apk     -- Gradle + NDK build of the *debug* variant, signed with the key committed to the
+#              repository, uploaded as an artifact
 #
-# Secrets needed for a signed release build (Settings -> Secrets and variables -> Actions):
-#   SHREK2_KEYSTORE_BASE64     base64 of the release .jks (see android/README.md, "Updating in place")
-#   SHREK2_KEYSTORE_PASSWORD   keystore password
-#   SHREK2_KEY_ALIAS           key alias inside the keystore
-#   SHREK2_KEY_PASSWORD        key password
-# Without them the workflow still builds and uploads an *unsigned* APK as an artifact, and says so.
+# Only the debug APK is built: it is the build a player installs, and it is signed with
+# android/debug.keystore -- the same key in every checkout and on every runner -- so each new build
+# replaces the installed app instead of asking for an uninstall, and the installed game files stay.
+# (android/README.md, "Updating in place".)
 name: Android APK
 
 on:
@@ -70,11 +69,32 @@ jobs:
       - name: DXT -> ETC2 transcoder
         run: tools/etc2-test.sh
 
+      - name: Kotlin compiler
+        # The installer check compiles the APK's own installer sources, so a Kotlin compiler is needed
+        # here. It comes from npm (the same package the build scripts accept through $KOTLINC) -- the
+        # Android cmdline-tools do not ship one.
+        run: |
+          npm install --no-save --no-audit --no-fund kotlin-compiler@2.4.21
+          echo "KOTLINC=$PWD/node_modules/kotlin-compiler/bin/kotlinc" >> "$GITHUB_ENV"
+          "$PWD/node_modules/kotlin-compiler/bin/kotlinc" -version
+
+      - name: Disc installer (corpus + Kotlin port)
+        # The corpus generator builds a synthetic disc (ISO 9660 + MSI + LZX cabinet), installs it with
+        # the TypeScript installer that the web build uses, and writes a manifest with the MD5 of every
+        # file; then the Kotlin installer that ships in the APK has to produce the same files. A bug in
+        # either implementation, or a drift between them, fails here -- in a minute, not on a phone.
+        run: tools/installer-test.sh
+
       - name: Native syntax check (no NDK needed)
         run: tools/android-check.sh
 
       - name: Release rules (signing, version codes, update eligibility)
         run: tools/release-test.sh
+
+      - name: Launcher (type-check against Android API stubs)
+        # The launcher screen and the installer are compiled here as well: the Gradle build does it too,
+        # but it needs the SDK and the NDK (minutes), and a renamed symbol should fail in seconds.
+        run: tools/android-stubs.sh
 
       - name: Lint the build scripts
         run: |
@@ -82,6 +102,7 @@ jobs:
           shellcheck -S warning tools/build-apk.sh tools/build-android.sh tools/android-version.sh \
             tools/android-check.sh tools/android-release-notes.sh tools/release-test.sh \
             tools/android-keygen.sh tools/etc2-test.sh tools/build-ffmpeg-android.sh \
+            tools/installer-test.sh tools/android-stubs.sh \
             .github/scripts/fetch-ffmpeg-android.sh
 
       - name: Version numbers
@@ -155,7 +176,7 @@ jobs:
           retention-days: 7
 
   apk:
-    name: Build APK
+    name: Build debug APK
     needs: [checks, image]
     # `image` is skipped when there is no reference executable; that must not block the APK.
     if: always() && needs.checks.result == 'success' && (needs.image.result == 'success' || needs.image.result == 'skipped')
@@ -287,8 +308,8 @@ jobs:
           # Report the signing configuration first: a build that is not signed is not installable, so the
           # log has to say which key Gradle picked before the expensive part starts.
           ./gradlew --no-daemon -q signingReport 2>&1 | tee ../signing.log || true
-          grep -A3 "Variant: release" ../signing.log | head -8 || true
-          if ! ./gradlew --no-daemon --stacktrace assembleRelease 2>&1 | tee -a ../assemble.log; then
+          grep -A3 "Variant: debug" ../signing.log | head -8 || true
+          if ! ./gradlew --no-daemon --stacktrace assembleDebug 2>&1 | tee -a ../assemble.log; then
             grep -E "error:|e: |FAILURE|What went wrong|Caused by|^\* " -A2 ../assemble.log | tail -n 40 | sed 's/^/::error::/' || true
             tail -n 20 ../assemble.log | sed 's/^/::error::/'
             exit 1
@@ -304,15 +325,16 @@ jobs:
             echo
             echo "| | |"
             echo "| --- | --- |"
+            echo "| variant | debug |"
             echo "| version | ${{ steps.version.outputs.name }} (${{ steps.version.outputs.code }}) |"
             echo "| requested key | ${{ steps.keystore.outputs.signed }} |"
             echo "| triggering ref | \`${{ github.ref }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
-          ls -l android/app/build/outputs/apk/release/ || true
-          APK=android/app/build/outputs/apk/release/app-release.apk
+          ls -l android/app/build/outputs/apk/debug/ || true
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
           # An unsignable build is named ...-unsigned.apk by AGP. Never accept it: it cannot be installed.
-          if [ ! -f "$APK" ] && [ -f android/app/build/outputs/apk/release/app-release-unsigned.apk ]; then
-            echo "::error title=the APK is unsigned::AGP produced app-release-unsigned.apk"
+          if [ ! -f "$APK" ] && [ -f android/app/build/outputs/apk/debug/app-debug-unsigned.apk ]; then
+            echo "::error title=the APK is unsigned::AGP produced app-debug-unsigned.apk"
             sed 's/^/::error::/' assemble.log | tail -n 20
             exit 1
           fi
@@ -376,16 +398,16 @@ jobs:
       - name: Rename
         id: apk
         run: |
-          APK=android/app/build/outputs/apk/release/app-release.apk
-          [ -f "$APK" ] || APK=android/app/build/outputs/apk/release/app-release-unsigned.apk
-          OUT="shrek2-${{ steps.version.outputs.name }}.apk"
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          [ -f "$APK" ] || APK=android/app/build/outputs/apk/debug/app-debug-unsigned.apk
+          OUT="shrek2-${{ steps.version.outputs.name }}-debug.apk"
           cp "$APK" "$OUT"
           echo "path=$OUT" >> "$GITHUB_OUTPUT"
           echo "$(sha256sum "$OUT")" > "$OUT.sha256"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: apk
+          name: apk-debug
           path: |
             shrek2-*.apk
             shrek2-*.apk.sha256
@@ -406,7 +428,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: apk
+          name: apk-debug
 
       - name: Prove the APK installs as an update
         env:
@@ -414,7 +436,8 @@ jobs:
         run: |
           BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
           export ANDROID_SDK_ROOT="$ANDROID_HOME"
-          PREV="$(gh release view --json tagName --jq .tagName 2>/dev/null | sed -n 's/^v//p' || true)"
+          # The previous release's certificate has to match, or Android refuses the install ("app not
+          # installed") and the player would have to uninstall, losing the game files.
           PREV_FROM_TAGS="$(git tag --list 'v*' --sort=-v:refname | grep -v "^${GITHUB_REF_NAME}$" | head -1 || true)"
           prev_code=""
           if [ -n "$PREV_FROM_TAGS" ]; then
