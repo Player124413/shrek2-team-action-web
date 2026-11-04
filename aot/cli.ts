@@ -23,6 +23,7 @@ import { Arm64FunctionEmitter } from "./src/arch-arm64.ts";
 import type { FunctionCode } from "./src/arch-arm64.ts";
 import { RUNTIME_IMPORTS } from "./src/interp.ts";
 import { buildModule, parseModule } from "./src/module.ts";
+import { optimise } from "./src/opt.ts";
 import { Program } from "../recomp/src/cfg.ts";
 import { liftFunction } from "../recomp/src/lift.ts";
 import { PeImage } from "../recomp/src/pe.ts";
@@ -95,7 +96,9 @@ export function buildImage(exe: Uint8Array, meta?: Metadata): { image: Uint8Arra
   const shared = { traps: [] as string[] };
   const compiled: FunctionCode[] = entries.map((entry) => {
     const fn = liftFunction(prog, prog.funcs.get(entry)!, (slot) => importIndex.get(slot)!);
-    return new Arm64FunctionEmitter(fn, shared).emit();
+    // The optimiser is semantics-preserving by construction and by test (aot/test/opt.test.mjs); the
+    // front end emits what the x86 does, not what a compiler would.
+    return new Arm64FunctionEmitter(optimise(fn).functions, shared).emit();
   });
   // `buildModule` takes already-emitted functions: the emitters above share one trap table.
   const built = buildModule(compiled, { importNames: RUNTIME_IMPORTS });

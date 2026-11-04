@@ -74,6 +74,33 @@ complete — see `recomp/src/translate.ts`).
    PE entry point exactly like `runtime/src/main.cpp`.
 4. Every guest call goes through `rt::game_owns`/`rt::game_call` → a pointer into the mapped image.
 
+## Performance
+
+Where the time goes, and what the port does about it:
+
+* **Guest code runs as native AArch64.** No interpreter, no per-instruction dispatch: a guest function
+  is one `blr` away (`rt::game_call`), and calls between functions in the image are direct.
+* **The image is optimised before it is compiled** (`aot/src/opt.ts`): constant folding, dead x86 flag
+  stores (with the carry/parity computation behind them), and redundant register syncs. On the
+  differential corpus that is ~44% fewer code bytes for identical behaviour, measured against running
+  the same test with the optimiser switched off.
+* **Flags are computed lazily.** The emitter only evaluates `cf/pf/af/zf/sf/of` when the IR reads them,
+  and the optimiser removes most of the reads, so a `sub` is a `subs` rather than a record plus six
+  expressions.
+* **Register file.** Guest GPRs, `ftop` and `df` live in callee-saved host registers; the `Cpu` struct
+  is touched only at calls, helper boundaries and returns (`syncout`/`syncin` in `arch-arm64.ts`).
+* **Rendering** is a single GLES 3 pipeline with a state cache (`runtime/src/gles/renderer.cpp`): the
+  D3D9 fixed-function state is translated once per change, not per draw, and stream buffers are
+  re-used.
+* **Boot cost** is paid once: the AOT image is built at packaging time, cached in `files/cache/` on
+  first launch, and memory-mapped `PROT_EXEC` afterwards (`aot_module.cpp`), so a cold start maps
+  ~10s of MB instead of compiling anything.
+
+Not done yet, in rough order of expected payoff: register allocation across the pinned set for
+non-guest locals (many spills are still stack slots), common-subexpression elimination for repeated
+`0x401000 + x` address formation, and a per-function LRU code cache so that hot functions stay mapped
+when an image outgrows what a device will keep resident.
+
 ## Deliberate limitations
 
 * **arm64 only.** The code generator emits AArch64; there is no fallback interpreter in the APK. An

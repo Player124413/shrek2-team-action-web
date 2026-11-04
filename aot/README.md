@@ -15,6 +15,13 @@ Shrek 2.exe --recomp/--> IR --aot/--> ARM64 machine code --mmap(PROT_EXEC)--> na
 * `src/arch-arm64.ts` — IR → ARM64: register allocation over the callee-saved registers, stack
   spill slots, structured-free basic-block emission (real branches, jump tables), and the runtime
   ABI the C++ side expects (`void f(Cpu*)`).
+* `src/opt.ts` — the IR optimisation passes the image build runs before code generation: constant
+  folding (including the identities the lifter emits: `+0`, `^0`, `&-1`, `*1`, shifts by zero, selects
+  with constant arms), **dead x86 flag stores** (a dataflow pass: the lifter writes `cf/pf/af/zf/sf/of`
+  after every arithmetic instruction, and the next consumer is usually far away and overwritten first —
+  the expression behind a dead store is where the carry/parity/overflow computation lives, so removing
+  the store removes that work too), and adjacent `syncout`/`syncin` pairs, which publish and reload the
+  same register values.
 * `src/module.ts` — module container and loader. Concatenates compiled functions into one
   relocatable image (header, entry table, code, relocation table, jump-table list) and resolves it
   when it is mapped: runtime imports become C function pointers, guest calls become addresses inside
@@ -27,14 +34,19 @@ Shrek 2.exe --recomp/--> IR --aot/--> ARM64 machine code --mmap(PROT_EXEC)--> na
     Unicorn, comparing the whole `Cpu` struct and a memory window;
   * `module.test.mjs` builds a module out of three functions, maps it at an address it was not built
     for, relocates it and runs it, so guest calls, imports and jump tables are checked through the
-    loader rather than in isolation.
+    loader rather than in isolation;
+  * `opt.test.mjs` compiles functions shaped like lifted x86 *twice* — with and without the optimiser —
+    interprets both, and runs the optimised machine code in Unicorn, so a pass that deletes something
+    live shows up as a state mismatch. It also asserts that each pass actually fires, that the code got
+    smaller, and that a flag written in one block and read in its successor survives (the mistake that
+    would break every loop condition).
 
   Runtime helpers are never stubbed: the interpreter records the memory delta and the result of
   every helper call and the runner replays them, so a mismatch can only come from the code
   generator or the loader.
 
-Run `node aot/test/enc.test.mjs`, `node aot/test/arch.test.mjs` and `node aot/test/module.test.mjs`
-(needs `python3 -m pip install unicorn capstone`). `CASES=<n>` sets how many random functions
+Run `node aot/test/enc.test.mjs`, `node aot/test/arch.test.mjs`, `node aot/test/module.test.mjs` and
+`node aot/test/opt.test.mjs` (needs `python3 -m pip install unicorn capstone`). `CASES=<n>` sets how many random functions
 `arch.test.mjs` generates; `DUMP=<index>` prints the IR and the compiled code of one case.
 
 ## Building an image
@@ -51,6 +63,11 @@ node aot/cli.ts check work/aot
 * `game.skx` — the side table the loader needs: `guestAddress codeOffset` per function (the image does
   not store function sizes), then one trap message per line in image-wide id order;
 * `aot.txt` — a one-line summary.
+
+The image build runs `optimise()` from `src/opt.ts` on every function before it is compiled; on the
+test corpus that is ~44% fewer bytes of machine code for the same behaviour (constant folds, dead flag
+stores, redundant syncs), and the dead flag stores also remove the carry/parity computation behind
+them at run time.
 
 Trap ids are shared by the whole image (`new Arm64FunctionEmitter(fn, shared)`), because the runtime
 receives a bare integer from `rt_trap_id`.
