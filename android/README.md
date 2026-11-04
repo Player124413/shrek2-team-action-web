@@ -49,9 +49,16 @@ tools/build-apk.sh --exe "/path/to/Shrek 2.exe" --meta metadata/<sha256>.json
 adb install -r android/app/build/outputs/apk/release/app-release.apk
 ```
 
-CI does the same on every push (`.github/workflows/android.yml`): the tests and the native syntax check
-first, then the image, then the APK, and on a `v*` tag a release whose APK is proven to install as an
-update over the previous one. Run `node tools/check-workflows.mjs` after touching the workflow.
+CI does the same on every push (`.github/workflows/android.yml`): the tests, the native syntax check and
+the release rules first, then the image, then the APK, and on a `v*` tag a release whose APK is proven
+to install as an update over the previous one. The pieces that can run without an SDK are testable
+locally:
+
+```sh
+tools/android-check.sh     # native platform layer compiles (-Werror) without an NDK
+tools/release-test.sh      # version codes + "will this APK replace the installed one?"
+node tools/check-workflows.mjs   # the workflow itself: jobs, needs, step outputs, bash -n
+```
 
 ## Updating in place
 

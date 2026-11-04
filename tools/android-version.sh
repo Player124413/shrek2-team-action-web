@@ -14,8 +14,9 @@
 # scheme offset from the last tag: 0.0.N with N = total commit count, so every CI run is installable
 # over the previous one. The counters are capped so the value always grows and always fits in an int.
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT"
+# The *calling* repository is the source of truth, not the one the script happens to live in: CI may
+# run it from a checkout elsewhere, and tools/release-test.sh runs it from a synthetic repository.
+cd "${SHREK2_GIT_DIR:-$PWD}"
 
 if [ -n "${SHREK2_VERSION_CODE:-}" ] && [ -n "${SHREK2_VERSION_NAME:-}" ]; then
   echo "$SHREK2_VERSION_CODE $SHREK2_VERSION_NAME"

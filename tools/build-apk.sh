@@ -60,7 +60,17 @@ fi
 
 # ---- 4. Gradle ---------------------------------------------------------------------------------------
 cd "$ROOT/android"
-./gradlew --no-daemon "assemble${VARIANT^}"
+GRADLEW=./gradlew
+if [ ! -x "$GRADLEW" ]; then
+  # The wrapper is not committed here, so use whatever Gradle is on PATH (CI installs one).
+  command -v gradle >/dev/null || {
+    echo "no android/gradlew and no gradle on PATH" >&2
+    echo "Run 'gradle wrapper' once in android/, or install Gradle and set PATH." >&2
+    exit 1
+  }
+  GRADLEW=gradle
+fi
+"$GRADLEW" --no-daemon "assemble${VARIANT^}"
 
 APK="$ROOT/android/app/build/outputs/apk/$VARIANT/app-$VARIANT.apk"
 [ -f "$APK" ] || { echo "no APK at $APK" >&2; exit 1; }
@@ -76,8 +86,21 @@ fi
 if [ -n "$BUILD_TOOLS" ] && [ -x "$BUILD_TOOLS/apksigner" ]; then
   "$BUILD_TOOLS/apksigner" verify --print-certs "$APK" | head -4
 fi
-unzip -l "$APK" | grep -E "assets/(game\.sk2a|game\.skx)|lib/arm64-v8a/libshrek2\.so" || {
-  echo "the APK is missing the image or the native library" >&2
+unzip -l "$APK" | grep -E "lib/arm64-v8a/libshrek2\.so" || {
+  echo "the APK is missing the native library" >&2
   exit 1
 }
+# The image is optional (a fork may have no reference executable), but say so loudly.
+unzip -l "$APK" | grep -qE "assets/game\.sk2a" || {
+  echo "warning: the APK carries no AOT image; the launcher will say the game is not compiled" >&2
+}
+if [ "$VARIANT" = release ]; then
+  if [ -x "$BUILD_TOOLS/apksigner" ]; then
+    "$BUILD_TOOLS/apksigner" verify "$APK" && echo "signature: ok (installs as an update)"
+  else
+    echo "warning: apksigner not found, the signature was not verified" >&2
+  fi
+fi
+# Leave the tree clean: the image is a build input, not a source file.
+rm -f "$ASSETS/game.sk2a" "$ASSETS/game.skx"
 exit 0

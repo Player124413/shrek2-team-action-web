@@ -65,14 +65,20 @@ jobs:
       - name: Native syntax check (no NDK needed)
         run: tools/android-check.sh
 
+      - name: Release rules (signing, version codes, update eligibility)
+        run: tools/release-test.sh
+
       - name: Lint the build scripts
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
           shellcheck -S warning tools/build-apk.sh tools/build-android.sh tools/android-version.sh \
-            tools/android-check.sh tools/android-release-notes.sh tools/etc2-test.sh tools/build-ffmpeg-android.sh
+            tools/android-check.sh tools/android-release-notes.sh tools/release-test.sh \
+            tools/android-keygen.sh tools/etc2-test.sh tools/build-ffmpeg-android.sh \
+            .github/scripts/fetch-ffmpeg-android.sh
 
       - name: Version numbers
         run: |
+          # (tools/release-test.sh covers the derivation; this only guards the CI-facing contract.)
           # Every build has to be installable over the previous one, so the version code must be a
           # positive number that grows with the history.
           out="$(tools/android-version.sh)"
@@ -229,7 +235,10 @@ jobs:
           SHREK2_VERSION_NAME: ${{ steps.version.outputs.name }}
           SHREK2_KEYSTORE: ${{ runner.temp }}/keys/release.jks
         working-directory: android
-        run: ./gradlew --no-daemon --stacktrace assembleRelease
+        run: |
+          # No committed wrapper: generate one from the installed Gradle, then build with it.
+          [ -x ./gradlew ] || gradle wrapper --gradle-version 8.9 --no-daemon
+          ./gradlew --no-daemon --stacktrace assembleRelease
 
       - name: Inspect the APK
         run: |

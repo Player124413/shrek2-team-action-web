@@ -36,8 +36,10 @@ echo "signer SHA-256: $CERT"
 PREV_APK_URL="$(gh release view --json assets --jq '.assets[] | select(.name | endswith(".apk")) | .url' 2>/dev/null | head -1 || true)"
 if [ -n "$PREV_APK_URL" ]; then
   echo "comparing with the previous release: $PREV_APK_URL"
-  gh api "$PREV_APK_URL" -H "Accept: application/vnd.github.raw" > /tmp/previous.apk
-  "$BUILD_TOOLS/apksigner" verify --print-certs /tmp/previous.apk > /tmp/prev-certs.txt
+  PREV_APK="$(mktemp)"
+  trap 'rm -f "$PREV_APK"' EXIT
+  gh api "$PREV_APK_URL" -H "Accept: application/vnd.github.raw" > "$PREV_APK"
+  "$BUILD_TOOLS/apksigner" verify --print-certs "$PREV_APK" > /tmp/prev-certs.txt
   PREV_CERT="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' /tmp/prev-certs.txt | head -1)"
   if [ -n "$PREV_CERT" ] && [ "$PREV_CERT" != "$CERT" ]; then
     fail "signing key changed: $PREV_CERT -> $CERT. An update signed with a new key cannot be installed; the player would have to uninstall and lose the install and saves."

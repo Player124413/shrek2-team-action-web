@@ -26,21 +26,25 @@ val keystoreProperties = Properties().apply {
 fun signingValue(key: String, env: String): String? =
   keystoreProperties.getProperty(key) ?: System.getenv(env)
 
-val storeFilePath = signingValue("storeFile", "SHREK2_KEYSTORE")
-val releaseSigning = storeFilePath?.let { path ->
-  signingConfigs.create("release") {
-    storeFile = file(path)
-    storePassword = signingValue("storePassword", "SHREK2_KEYSTORE_PASSWORD")
-    keyAlias = signingValue("keyAlias", "SHREK2_KEY_ALIAS")
-    keyPassword = signingValue("keyPassword", "SHREK2_KEY_PASSWORD")
-    // v1 is not needed for Android 8+; v2/v3 are what keep an update "the same app".
-    enableV1Signing = false
-    enableV2Signing = true
-    enableV3Signing = true
-  }
-}
+val releaseStoreFile = signingValue("storeFile", "SHREK2_KEYSTORE")
 
 android {
+  signingConfigs {
+    if (releaseStoreFile != null) {
+      create("release") {
+        // Relative to android/, where keystore.properties lives.
+        storeFile = rootProject.file(releaseStoreFile)
+        storePassword = signingValue("storePassword", "SHREK2_KEYSTORE_PASSWORD")
+        keyAlias = signingValue("keyAlias", "SHREK2_KEY_ALIAS")
+        keyPassword = signingValue("keyPassword", "SHREK2_KEY_PASSWORD")
+        // v1 is not needed for Android 8+; v2/v3 are what keep an update "the same app".
+        enableV1Signing = false
+        enableV2Signing = true
+        enableV3Signing = true
+      }
+    }
+  }
+
   namespace = "org.shrek2.launcher"
   compileSdk = 35
   ndkVersion = "27.0.12077973"
@@ -50,10 +54,13 @@ android {
     // GLES 3.0 + AAudio (low-latency stream builder): Android 8.0.
     minSdk = 26
     targetSdk = 35
-    // `versionCode` must increase for Android to *update* an installed app (an equal or lower code is
-    // rejected by the installer, and a different signing key is rejected outright). CI overrides both
-    // from the git tag / run number; see .github/workflows/android.yml.
-    versionCode = (System.getenv("SHREK2_VERSION_CODE") ?: "1").toInt()
+    // `versionCode` must strictly increase for Android to *update* an installed app: an equal or lower
+    // code is rejected by the installer, exactly like a different signing key. Both come from
+    // tools/android-version.sh (git tags + commit count) via .github/workflows/android.yml; the
+    // fallbacks only matter for a build started by hand without the wrapper script.
+    versionCode = (System.getenv("SHREK2_VERSION_CODE") ?: "1").toInt().also {
+      require(it > 0) { "SHREK2_VERSION_CODE must be positive, got $it" }
+    }
     versionName = System.getenv("SHREK2_VERSION_NAME") ?: "0.1"
 
     ndk {
@@ -64,8 +71,7 @@ android {
     externalNativeBuild {
       cmake {
         cppFlags += listOf("-std=c++20", "-O2")
-        // Guest addresses up to 1 GiB must be reachable from a 32-bit guest pointer: keep the guest
-        // window in the low 4 GiB of the process (the runtime mmaps it at a fixed address).
+        // Optimised native code even in the debug-variant CMake build: the interpreter is the hot path.
         arguments += listOf("-DCMAKE_BUILD_TYPE=RelWithDebInfo")
       }
     }
@@ -82,7 +88,7 @@ android {
     release {
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      if (releaseSigning != null) signingConfig = releaseSigning
+      if (releaseStoreFile != null) signingConfig = signingConfigs.getByName("release")
     }
     debug {
       // A debug build installs side by side with a release one but cannot update it: different key.
