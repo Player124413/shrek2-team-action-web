@@ -306,9 +306,12 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           ls -l android/app/build/outputs/apk/release/ || true
           APK=android/app/build/outputs/apk/release/app-release.apk
-          # A signed release is always app-release.apk; the fallback only makes the message clear if
-          # signing is ever removed again.
-          [ -f "$APK" ] || APK=android/app/build/outputs/apk/release/app-release-unsigned.apk
+          # An unsignable build is named ...-unsigned.apk by AGP. Never accept it: it cannot be installed.
+          if [ ! -f "$APK" ] && [ -f android/app/build/outputs/apk/release/app-release-unsigned.apk ]; then
+            echo "::error title=the APK is unsigned::AGP produced app-release-unsigned.apk"
+            sed 's/^/::error::/' assemble.log | tail -n 20
+            exit 1
+          fi
           [ -f "$APK" ] || { echo "::error::no APK was produced"; exit 1; }
           BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
           "$BT/aapt2" dump badging "$APK" | grep -E "^package:|^native-code:"
